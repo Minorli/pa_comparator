@@ -19,3 +19,9 @@ pip install oracledb
 配置 remap_rules.txt： 填写所有需要 "remap" 的对象。
 执行程序：
 python db_comparator.py
+
+v9 版本只检查表及视图差异，不提供其他对象的检查和修复
+v10 版本提供表，视图，触发器等其他对象的检查，不提供修复
+v12 版本提供所有类型对象的检查，同时提供 fixup
+--
+基于 v10 迭代检查，基于 v12 版本迭代检查及修复逻辑
