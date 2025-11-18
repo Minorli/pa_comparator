@@ -1,0 +1,5 @@
+-- 基于列差异的 ALTER TABLE 修补脚本: OB_ANALYTICS.ORDERS_FACT (源: ORA_APP.ORDERS)
+-- 本文件由校验工具自动生成，请在 OceanBase 执行前仔细审核。
+
+-- 源端存在而目标端缺失的列，将通过 ALTER TABLE ADD 补齐：
+ALTER TABLE OB_ANALYTICS.ORDERS_FACT ADD (REMARK VARCHAR2(255));

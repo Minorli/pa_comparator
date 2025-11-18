@@ -1,0 +1,17 @@
+-- 修补缺失的 PACKAGE BODY OB_SHARE.PKG_EMP_MANAGE (源: ORA_HR.PKG_EMP_MANAGE)
+-- 本文件由校验工具自动生成，请在 OceanBase 执行前仔细审核。
+
+CREATE OR REPLACE EDITIONABLE PACKAGE BODY "OB_SHARE"."PKG_EMP_MANAGE" AS
+    PROCEDURE RAISE_SALARY(p_emp_id NUMBER, p_rate NUMBER) IS
+    BEGIN
+        UPDATE OB_STAGE.EMP
+           SET SALARY = SALARY * (1 + p_rate)
+         WHERE EMP_ID = p_emp_id;
+    END;
+    FUNCTION GET_DEPT_HEADCOUNT(p_dept_id NUMBER) RETURN NUMBER IS
+        v_cnt NUMBER;
+    BEGIN
+        SELECT COUNT(*) INTO v_cnt FROM OB_STAGE.EMP WHERE DEPT_ID = p_dept_id;
+        RETURN v_cnt;
+    END;
+END PKG_EMP_MANAGE;

@@ -18,10 +18,19 @@ pip install oracledb
 配置 db.ini： 详细填写您的Oracle和OceanBase连接信息。
 配置 remap_rules.txt： 填写所有需要 "remap" 的对象。
 执行程序：
-python db_comparator.py
 
-v9 版本只检查表及视图差异，不提供其他对象的检查和修复
-v10 版本提供表，视图，触发器等其他对象的检查，不提供修复
-v12 版本提供所有类型对象的检查，同时提供 fixup
---
-基于 v10 迭代检查，基于 v12 版本迭代检查及修复逻辑
+
+下面是离线包的使用方式，需在linux主机安装python3，测试版本为 python 3.7
+tar -zxvf pa_comparator_offline_pkg.tar.gz
+cd pa_comparator
+
+python3.7 -m venv venv
+source venv/bin/activate
+
+# (确保 (venv) 
+pip install --upgrade pip
+
+# 告诉 pip 从我们的本地 wheelhouse 安装
+pip install --no-index --find-links=wheelhouse oracledb cryptography
+
+python3 db_comparator_fixup_0.2.py
