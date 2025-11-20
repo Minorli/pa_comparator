@@ -83,9 +83,47 @@ def build_obclient_command(ob_cfg: Dict[str, str]) -> List[str]:
 
 
 def collect_sql_files(fixup_dir: Path, done_dir_name: str = DONE_DIR_NAME) -> List[Path]:
-    """Collect every *.sql file inside first-level subdirectories of fix_up."""
+    """
+    Collect *.sql files under fix_up with dependency-aware ordering:
+      1) sequence → table → table_alter → constraint → index
+      2) view / materialized_view
+      3) remaining code objects (synonym/procedure/function/package/type/trigger/etc.)
+    """
+    priority = [
+        "sequence",
+        "table",
+        "table_alter",
+        "constraint",
+        "index",
+        "view",
+        "materialized_view",
+        "synonym",
+        "procedure",
+        "function",
+        "package",
+        "package_body",
+        "type",
+        "type_body",
+        "trigger",
+        "job",
+        "schedule",
+        "grants",
+    ]
+    subdirs = {p.name: p for p in fixup_dir.iterdir() if p.is_dir() and p.name != done_dir_name}
+
+    ordered_groups: List[Path] = []
+    seen = set()
+    for name in priority:
+        if name in subdirs:
+            ordered_groups.append(subdirs[name])
+            seen.add(name)
+    # Append any remaining subfolders in alpha order to avoid missing custom categories
+    for name in sorted(subdirs.keys()):
+        if name not in seen:
+            ordered_groups.append(subdirs[name])
+
     sql_files: List[Path] = []
-    for group in sorted(p for p in fixup_dir.iterdir() if p.is_dir() and p.name != done_dir_name):
+    for group in ordered_groups:
         for sql_file in sorted(group.glob("*.sql")):
             if sql_file.is_file():
                 sql_files.append(sql_file)

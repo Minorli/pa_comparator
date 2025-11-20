@@ -1,0 +1,422 @@
+╭──────────────────────────────────────╮
+│ 数据库对象迁移校验报告 (V0.5 - Rich) │
+╰──────────────────────────────────────╯
+                                                                  综合概要                                                                  
+主对象 (TABLE/VIEW/etc.)   总计校验对象 (来自源库): 55                                                                                      
+                           一致: 0                                                                                                          
+                           缺失: 55                                                                                                         
+                           不匹配 (表列/长度): 0                                                                                            
+                           无效规则: 3                                                                                                      
+扩展对象 (INDEX/SEQ/etc.)  索引: 一致 0 / 差异 16                                                                                           
+                           约束: 一致 0 / 差异 16                                                                                           
+                           序列: 一致 0 / 差异 10                                                                                           
+                           触发器: 一致 0 / 差异 16                                                                                         
+依赖关系                   缺失依赖: 42  额外依赖: 0  跳过: 0                                                                               
+授权建议                   GRANT 语句数: 12                                                                                                 
+
+
+╭──────── 执行摘要 ────────╮
+│ 需要在目标端修改的对象   │
+│   - 无                   │
+│                          │
+│ 需要在目标端新增的对象   │
+│   - CONSTRAINT: 37       │
+│   - FUNCTION: 5          │
+│   - INDEX: 29            │
+│   - MATERIALIZED VIEW: 2 │
+│   - PACKAGE: 3           │
+│   - PACKAGE BODY: 3      │
+│   - PROCEDURE: 11        │
+│   - SEQUENCE: 12         │
+│   - SYNONYM: 4           │
+│   - TABLE: 16            │
+│   - TRIGGER: 3           │
+│   - TYPE: 3              │
+│   - TYPE BODY: 3         │
+│   - VIEW: 5              │
+╰──────────────────────────╯
+                                                                0. 检查汇总                                                                 
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ 对象类型                                 ┃                     Oracle 数量 ┃                      OceanBase 数量 ┃                  差异 ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━┩
+│ TABLE                                    │                              16 │                                   0 │                   -16 │
+│ VIEW                                     │                               5 │                                   0 │                    -5 │
+│ SYNONYM                                  │                               4 │                                   0 │                    -4 │
+│ TRIGGER                                  │                               3 │                                   0 │                    -3 │
+│ SEQUENCE                                 │                              12 │                                   0 │                   -12 │
+│ PROCEDURE                                │                              11 │                                   0 │                   -11 │
+│ FUNCTION                                 │                               5 │                                   0 │                    -5 │
+│ PACKAGE                                  │                               3 │                                   0 │                    -3 │
+│ PACKAGE BODY                             │                               3 │                                   0 │                    -3 │
+└──────────────────────────────────────────┴─────────────────────────────────┴─────────────────────────────────────┴───────────────────────┘
+                                                         1. 缺失的主对象 (共 55 个)                                                         
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ 类型                          ┃ 源对象 = 目标对象(应存在)                                                                                ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ [VIEW]                        │ ORA_SEC.VW_ACTIVE_USERS = OB_SEC.VW_ACTIVE_USERS                                                         │
+│ [SYNONYM]                     │ ORA_UTIL.SYN_ORDER = OB_SHARE.SYN_ORDER                                                                  │
+│ [SYNONYM]                     │ ORA_UTIL.SYN_REGION = OB_SHARE.SYN_REGION                                                                │
+│ [SYNONYM]                     │ ORA_UTIL.SYN_INVOICE = OB_SHARE.SYN_INVOICE                                                              │
+│ [SYNONYM]                     │ ORA_UTIL.SYN_POST_PROC = OB_SHARE.SYN_POST_PROC                                                          │
+│ [FUNCTION]                    │ ORA_UTIL.FN_CANARY = OB_SHARE.FN_CANARY                                                                  │
+│ [PROCEDURE]                   │ ORA_UTIL.SP_REFRESH_GATEWAY = OB_SHARE.SP_REFRESH_GATEWAY                                                │
+│ [TABLE]                       │ ORA_AUDIT.AUDIT_LOG = OB_AUDIT.AUDIT_LOG                                                                 │
+│ [TABLE]                       │ ORA_AUDIT.JOB_STATUS = OB_AUDIT.JOB_STATUS                                                               │
+│ [PROCEDURE]                   │ ORA_AUDIT.SP_ARCHIVE_LOG = OB_AUDIT.SP_ARCHIVE_LOG                                                       │
+│ [FUNCTION]                    │ ORA_AUDIT.FN_LAST_JOB = OB_AUDIT.FN_LAST_JOB                                                             │
+│ [VIEW]                        │ ORA_AUDIT.VW_AUDIT_SUMMARY = OB_AUDIT.VW_AUDIT_SUMMARY                                                   │
+│ [TABLE]                       │ ORA_PLAN.FORECAST_PLAN = OB_PLAN.FORECAST_PLAN                                                           │
+│ [PROCEDURE]                   │ ORA_PLAN.SP_PUBLISH_PLAN = OB_PLAN.SP_PUBLISH_PLAN                                                       │
+│ [PACKAGE]                     │ ORA_PLAN.PKG_PLAN_SIM = OB_PLAN.PKG_PLAN_SIM                                                             │
+│ [PACKAGE BODY]                │ ORA_PLAN.PKG_PLAN_SIM = OB_PLAN.PKG_PLAN_SIM                                                             │
+│ [TABLE]                       │ ORA_MDM.ATTRIBUTE_DEF = OB_MDM.ATTRIBUTE_DEF                                                             │
+│ [TYPE]                        │ ORA_MDM.T_DESC_LIST = OB_MDM.T_DESC_LIST                                                                 │
+│ [TYPE BODY]                   │ ORA_MDM.T_DESC_LIST = OB_MDM.T_DESC_LIST                                                                 │
+│ [PROCEDURE]                   │ ORA_MDM.SP_REFRESH_ATTRIBUTE = OB_MDM.SP_REFRESH_ATTRIBUTE                                               │
+│ [VIEW]                        │ ORA_RPT.VW_ORDER_REGION = OB_RPT.VW_ORDER_REGION                                                         │
+│ [MATERIALIZED VIEW]           │ ORA_RPT.MV_MARGIN_ROLLUP = OB_RPT.MV_MARGIN_ROLLUP                                                       │
+│ [PROCEDURE]                   │ ORA_RPT.SP_REFRESH_REPORTS = OB_RPT.SP_REFRESH_REPORTS                                                   │
+│ [TABLE]                       │ ORA_ML.MODEL_VERSION = OB_ML.MODEL_VERSION                                                               │
+│ [TABLE]                       │ ORA_ML.MODEL_RUN = OB_ML.MODEL_RUN                                                                       │
+│ [PROCEDURE]                   │ ORA_ML.SP_REGISTER_MODEL = OB_ML.SP_REGISTER_MODEL                                                       │
+│ [FUNCTION]                    │ ORA_ML.FN_SCORE_MODEL = OB_ML.FN_SCORE_MODEL                                                             │
+│ [TABLE]                       │ ORA_REF.REGION_DIM = OB_DIM.REGION_DIM                                                                   │
+│ [TABLE]                       │ ORA_REF.CHANNEL_DIM = OB_STAGE.CHANNEL_DIM                                                               │
+│ [TABLE]                       │ ORA_REF.PRODUCT_CATEGORY = OB_STAGE.PRODUCT_CATEGORY                                                     │
+│ [PROCEDURE]                   │ ORA_REF.SP_REFRESH_DIM = OB_SHARE.SP_REFRESH_DIM                                                         │
+│ [TABLE]                       │ ORA_TXN.SALES_ORDER = OB_APP.F_ORDER                                                                     │
+│ [TABLE]                       │ ORA_TXN.SALES_ORDER_LINE = OB_APP.F_ORDER_LINE                                                           │
+│ [PROCEDURE]                   │ ORA_TXN.SP_CLOSE_ORDER = OB_APP.SP_CLOSE_ORDER                                                           │
+│ [FUNCTION]                    │ ORA_TXN.FN_ORDER_TOTAL = OB_APP.FN_ORDER_TOTAL                                                           │
+│ [PACKAGE]                     │ ORA_TXN.PKG_ORDER_ROUTER = OB_APP.PKG_ORDER_ROUTER                                                       │
+│ [PACKAGE BODY]                │ ORA_TXN.PKG_ORDER_ROUTER = OB_APP.PKG_ORDER_ROUTER                                                       │
+│ [VIEW]                        │ ORA_TXN.VW_REGION_PROMISE = OB_ANALYTICS.VW_REGION_PROMISE                                               │
+│ [TABLE]                       │ ORA_DIGITAL.STREAM_EVENT = OB_STREAM.STREAM_EVENT                                                        │
+│ [MATERIALIZED VIEW]           │ ORA_DIGITAL.MV_EVENT_AGG = OB_ANALYTICS.MV_EVENT_AGG                                                     │
+│ [TYPE]                        │ ORA_DIGITAL.T_FEATURE_VECTOR = OB_STREAM.T_FEATURE_VECTOR                                                │
+│ [TYPE BODY]                   │ ORA_DIGITAL.T_FEATURE_VECTOR = OB_STREAM.T_FEATURE_VECTOR                                                │
+│ [PROCEDURE]                   │ ORA_DIGITAL.SP_RECALC_FEATURES = OB_STREAM.SP_RECALC_FEATURES                                            │
+│ [TABLE]                       │ ORA_BILL.INVOICE_HEADER = OB_LEDGER.INVOICE_HEADER                                                       │
+│ [TABLE]                       │ ORA_BILL.INVOICE_LINE = OB_LEDGER.INVOICE_LINE                                                           │
+│ [PROCEDURE]                   │ ORA_BILL.SP_POST_INVOICE = OB_FIN.SP_POST_INVOICE                                                        │
+│ [PACKAGE]                     │ ORA_BILL.PKG_BILLING_CORE = OB_FIN.PKG_BILLING_CORE                                                      │
+│ [PACKAGE BODY]                │ ORA_BILL.PKG_BILLING_CORE = OB_FIN.PKG_BILLING_CORE                                                      │
+│ [TYPE]                        │ ORA_BILL.T_INVOICE_SUMMARY = OB_FIN.T_INVOICE_SUMMARY                                                    │
+│ [TYPE BODY]                   │ ORA_BILL.T_INVOICE_SUMMARY = OB_FIN.T_INVOICE_SUMMARY                                                    │
+│ [VIEW]                        │ ORA_BILL.VW_OVERDUE_INVOICE = OB_LEDGER.VW_OVERDUE_INVOICE                                               │
+│ [TABLE]                       │ ORA_SEC.ROLE_POLICY = OB_SEC.ROLE_POLICY                                                                 │
+│ [TABLE]                       │ ORA_SEC.USER_MATRIX = OB_SEC.USER_MATRIX                                                                 │
+│ [PROCEDURE]                   │ ORA_SEC.SP_GRANT_ROLE = OB_SEC.SP_GRANT_ROLE                                                             │
+│ [FUNCTION]                    │ ORA_SEC.FN_IS_ALLOWED = OB_SEC.FN_IS_ALLOWED                                                             │
+└───────────────────────────────┴──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                      5. 索引一致性检查 (共 16 项差异)                                                      
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ 表名                                        ┃ 差异详情                                                                                   ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ OB_AUDIT.AUDIT_LOG                          │ - 缺失: ['PK_AUDIT_LOG']                                                                   │
+│                                             │ * 索引列 ['AUDIT_ID'] 在目标端未找到。                                                     │
+│ OB_AUDIT.JOB_STATUS                         │ - 缺失: ['PK_JOB_STATUS', 'UK_JOB_NAME']                                                   │
+│                                             │ * 索引列 ['JOB_ID'] 在目标端未找到。                                                       │
+│                                             │ * 索引列 ['JOB_NAME'] 在目标端未找到。                                                     │
+│ OB_PLAN.FORECAST_PLAN                       │ - 缺失: ['PK_FORECAST_PLAN']                                                               │
+│                                             │ * 索引列 ['PLAN_ID'] 在目标端未找到。                                                      │
+│ OB_MDM.ATTRIBUTE_DEF                        │ - 缺失: ['PK_ATTRIBUTE_DEF']                                                               │
+│                                             │ * 索引列 ['ATTR_ID'] 在目标端未找到。                                                      │
+│ OB_ML.MODEL_VERSION                         │ - 缺失: ['PK_MODEL_VERSION']                                                               │
+│                                             │ * 索引列 ['MODEL_ID'] 在目标端未找到。                                                     │
+│ OB_ML.MODEL_RUN                             │ - 缺失: ['PK_MODEL_RUN']                                                                   │
+│                                             │ * 索引列 ['RUN_ID'] 在目标端未找到。                                                       │
+│ OB_DIM.REGION_DIM                           │ - 缺失: ['PK_REGION_DIM', 'UK_REGION_CODE']                                                │
+│                                             │ * 索引列 ['REGION_CODE'] 在目标端未找到。                                                  │
+│                                             │ * 索引列 ['REGION_ID'] 在目标端未找到。                                                    │
+│ OB_STAGE.CHANNEL_DIM                        │ - 缺失: ['IDX_CHANNEL_REGION', 'PK_CHANNEL_DIM', 'UK_CHANNEL_CODE']                        │
+│                                             │ * 索引列 ['CHANNEL_ID'] 在目标端未找到。                                                   │
+│                                             │ * 索引列 ['CHANNEL_CODE'] 在目标端未找到。                                                 │
+│                                             │ * 索引列 ['REGION_ID'] 在目标端未找到。                                                    │
+│ OB_STAGE.PRODUCT_CATEGORY                   │ - 缺失: ['IDX_PRODUCT_REGION', 'PK_PRODUCT_CATEGORY', 'UK_PRODUCT_CODE']                   │
+│                                             │ * 索引列 ['CATEGORY_ID'] 在目标端未找到。                                                  │
+│                                             │ * 索引列 ['CATEGORY_CODE'] 在目标端未找到。                                                │
+│                                             │ * 索引列 ['REGION_ID'] 在目标端未找到。                                                    │
+│ OB_APP.F_ORDER                              │ - 缺失: ['IDX_ORDER_REGION', 'PK_SALES_ORDER', 'UK_SALES_ORDER_CODE']                      │
+│                                             │ * 索引列 ['ORDER_CODE'] 在目标端未找到。                                                   │
+│                                             │ * 索引列 ['ORDER_ID'] 在目标端未找到。                                                     │
+│                                             │ * 索引列 ['REGION_ID', 'CHANNEL_ID'] 在目标端未找到。                                      │
+│ OB_APP.F_ORDER_LINE                         │ - 缺失: ['IDX_ORDER_LINE_CAT', 'PK_SALES_ORDER_LINE', 'UK_ORDER_LINE']                     │
+│                                             │ * 索引列 ['ORDER_LINE_ID'] 在目标端未找到。                                                │
+│                                             │ * 索引列 ['ORDER_ID', 'LINE_NUMBER'] 在目标端未找到。                                      │
+│                                             │ * 索引列 ['CATEGORY_ID'] 在目标端未找到。                                                  │
+│ OB_STREAM.STREAM_EVENT                      │ - 缺失: ['PK_STREAM_EVENT']                                                                │
+│                                             │ * 索引列 ['EVENT_ID'] 在目标端未找到。                                                     │
+│ OB_LEDGER.INVOICE_HEADER                    │ - 缺失: ['IDX_INV_HEADER_ORDER', 'PK_INVOICE_HEADER']                                      │
+│                                             │ * 索引列 ['INVOICE_ID'] 在目标端未找到。                                                   │
+│                                             │ * 索引列 ['ORDER_ID'] 在目标端未找到。                                                     │
+│ OB_LEDGER.INVOICE_LINE                      │ - 缺失: ['PK_INVOICE_LINE', 'UK_INVOICE_LINE']                                             │
+│                                             │ * 索引列 ['INVOICE_LINE_ID'] 在目标端未找到。                                              │
+│                                             │ * 索引列 ['INVOICE_ID', 'LINE_NUMBER'] 在目标端未找到。                                    │
+│ OB_SEC.ROLE_POLICY                          │ - 缺失: ['PK_ROLE_POLICY']                                                                 │
+│                                             │ * 索引列 ['ROLE_CODE', 'PRIVILEGE_CODE'] 在目标端未找到。                                  │
+│ OB_SEC.USER_MATRIX                          │ - 缺失: ['PK_USER_MATRIX', 'UK_USER_LOGIN']                                                │
+│                                             │ * 索引列 ['USER_ID'] 在目标端未找到。                                                      │
+│                                             │ * 索引列 ['LOGIN_NAME'] 在目标端未找到。                                                   │
+└─────────────────────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                6. 约束 (PK/UK/FK) 一致性检查 (共 16 项差异)                                                
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ 表名                                        ┃ 差异详情                                                                                   ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ OB_AUDIT.AUDIT_LOG                          │ - 缺失: ['FK_AUDIT_ORDER', 'PK_AUDIT_LOG']                                                 │
+│                                             │ * PRIMARY KEY: 源约束 PK_AUDIT_LOG (列 ['AUDIT_ID']) 在目标端未找到。                      │
+│                                             │ * FOREIGN KEY: 源约束 FK_AUDIT_ORDER (列 ['ORDER_ID']) 在目标端未找到。                    │
+│ OB_AUDIT.JOB_STATUS                         │ - 缺失: ['PK_JOB_STATUS', 'UK_JOB_NAME']                                                   │
+│                                             │ * PRIMARY KEY: 源约束 PK_JOB_STATUS (列 ['JOB_ID']) 在目标端未找到。                       │
+│                                             │ * UNIQUE KEY: 源约束 UK_JOB_NAME (列 ['JOB_NAME']) 在目标端未找到。                        │
+│ OB_PLAN.FORECAST_PLAN                       │ - 缺失: ['FK_PLAN_REGION', 'PK_FORECAST_PLAN']                                             │
+│                                             │ * PRIMARY KEY: 源约束 PK_FORECAST_PLAN (列 ['PLAN_ID']) 在目标端未找到。                   │
+│                                             │ * FOREIGN KEY: 源约束 FK_PLAN_REGION (列 ['REGION_ID']) 在目标端未找到。                   │
+│ OB_MDM.ATTRIBUTE_DEF                        │ - 缺失: ['PK_ATTRIBUTE_DEF']                                                               │
+│                                             │ * PRIMARY KEY: 源约束 PK_ATTRIBUTE_DEF (列 ['ATTR_ID']) 在目标端未找到。                   │
+│ OB_ML.MODEL_VERSION                         │ - 缺失: ['PK_MODEL_VERSION']                                                               │
+│                                             │ * PRIMARY KEY: 源约束 PK_MODEL_VERSION (列 ['MODEL_ID']) 在目标端未找到。                  │
+│ OB_ML.MODEL_RUN                             │ - 缺失: ['FK_MODEL_RUN', 'PK_MODEL_RUN']                                                   │
+│                                             │ * PRIMARY KEY: 源约束 PK_MODEL_RUN (列 ['RUN_ID']) 在目标端未找到。                        │
+│                                             │ * FOREIGN KEY: 源约束 FK_MODEL_RUN (列 ['MODEL_ID']) 在目标端未找到。                      │
+│ OB_DIM.REGION_DIM                           │ - 缺失: ['PK_REGION_DIM', 'UK_REGION_CODE']                                                │
+│                                             │ * PRIMARY KEY: 源约束 PK_REGION_DIM (列 ['REGION_ID']) 在目标端未找到。                    │
+│                                             │ * UNIQUE KEY: 源约束 UK_REGION_CODE (列 ['REGION_CODE']) 在目标端未找到。                  │
+│ OB_STAGE.CHANNEL_DIM                        │ - 缺失: ['FK_CHANNEL_REGION', 'PK_CHANNEL_DIM', 'UK_CHANNEL_CODE']                         │
+│                                             │ * PRIMARY KEY: 源约束 PK_CHANNEL_DIM (列 ['CHANNEL_ID']) 在目标端未找到。                  │
+│                                             │ * UNIQUE KEY: 源约束 UK_CHANNEL_CODE (列 ['CHANNEL_CODE']) 在目标端未找到。                │
+│                                             │ * FOREIGN KEY: 源约束 FK_CHANNEL_REGION (列 ['REGION_ID']) 在目标端未找到。                │
+│ OB_STAGE.PRODUCT_CATEGORY                   │ - 缺失: ['FK_PRODUCT_REGION', 'PK_PRODUCT_CATEGORY', 'UK_PRODUCT_CODE']                    │
+│                                             │ * PRIMARY KEY: 源约束 PK_PRODUCT_CATEGORY (列 ['CATEGORY_ID']) 在目标端未找到。            │
+│                                             │ * UNIQUE KEY: 源约束 UK_PRODUCT_CODE (列 ['CATEGORY_CODE']) 在目标端未找到。               │
+│                                             │ * FOREIGN KEY: 源约束 FK_PRODUCT_REGION (列 ['REGION_ID']) 在目标端未找到。                │
+│ OB_APP.F_ORDER                              │ - 缺失: ['FK_ORDER_CHANNEL', 'FK_ORDER_REGION', 'PK_SALES_ORDER', 'UK_SALES_ORDER_CODE']   │
+│                                             │ * PRIMARY KEY: 源约束 PK_SALES_ORDER (列 ['ORDER_ID']) 在目标端未找到。                    │
+│                                             │ * UNIQUE KEY: 源约束 UK_SALES_ORDER_CODE (列 ['ORDER_CODE']) 在目标端未找到。              │
+│                                             │ * FOREIGN KEY: 源约束 FK_ORDER_REGION (列 ['REGION_ID']) 在目标端未找到。                  │
+│                                             │ * FOREIGN KEY: 源约束 FK_ORDER_CHANNEL (列 ['CHANNEL_ID']) 在目标端未找到。                │
+│ OB_APP.F_ORDER_LINE                         │ - 缺失: ['FK_LINE_CATEGORY', 'FK_LINE_ORDER', 'PK_SALES_ORDER_LINE', 'UK_ORDER_LINE']      │
+│                                             │ * PRIMARY KEY: 源约束 PK_SALES_ORDER_LINE (列 ['ORDER_LINE_ID']) 在目标端未找到。          │
+│                                             │ * UNIQUE KEY: 源约束 UK_ORDER_LINE (列 ['ORDER_ID', 'LINE_NUMBER']) 在目标端未找到。       │
+│                                             │ * FOREIGN KEY: 源约束 FK_LINE_CATEGORY (列 ['CATEGORY_ID']) 在目标端未找到。               │
+│                                             │ * FOREIGN KEY: 源约束 FK_LINE_ORDER (列 ['ORDER_ID']) 在目标端未找到。                     │
+│ OB_STREAM.STREAM_EVENT                      │ - 缺失: ['FK_EVENT_ORDER', 'PK_STREAM_EVENT']                                              │
+│                                             │ * PRIMARY KEY: 源约束 PK_STREAM_EVENT (列 ['EVENT_ID']) 在目标端未找到。                   │
+│                                             │ * FOREIGN KEY: 源约束 FK_EVENT_ORDER (列 ['ORDER_ID']) 在目标端未找到。                    │
+│ OB_LEDGER.INVOICE_HEADER                    │ - 缺失: ['FK_INV_ORDER', 'PK_INVOICE_HEADER']                                              │
+│                                             │ * PRIMARY KEY: 源约束 PK_INVOICE_HEADER (列 ['INVOICE_ID']) 在目标端未找到。               │
+│                                             │ * FOREIGN KEY: 源约束 FK_INV_ORDER (列 ['ORDER_ID']) 在目标端未找到。                      │
+│ OB_LEDGER.INVOICE_LINE                      │ - 缺失: ['FK_INVOICE_LINE', 'PK_INVOICE_LINE', 'UK_INVOICE_LINE']                          │
+│                                             │ * PRIMARY KEY: 源约束 PK_INVOICE_LINE (列 ['INVOICE_LINE_ID']) 在目标端未找到。            │
+│                                             │ * UNIQUE KEY: 源约束 UK_INVOICE_LINE (列 ['INVOICE_ID', 'LINE_NUMBER']) 在目标端未找到。   │
+│                                             │ * FOREIGN KEY: 源约束 FK_INVOICE_LINE (列 ['INVOICE_ID']) 在目标端未找到。                 │
+│ OB_SEC.ROLE_POLICY                          │ - 缺失: ['PK_ROLE_POLICY']                                                                 │
+│                                             │ * PRIMARY KEY: 源约束 PK_ROLE_POLICY (列 ['ROLE_CODE', 'PRIVILEGE_CODE']) 在目标端未找到。 │
+│ OB_SEC.USER_MATRIX                          │ - 缺失: ['FK_USER_LAST_ORDER', 'PK_USER_MATRIX', 'UK_USER_LOGIN']                          │
+│                                             │ * PRIMARY KEY: 源约束 PK_USER_MATRIX (列 ['USER_ID']) 在目标端未找到。                     │
+│                                             │ * UNIQUE KEY: 源约束 UK_USER_LOGIN (列 ['LOGIN_NAME']) 在目标端未找到。                    │
+│                                             │ * FOREIGN KEY: 源约束 FK_USER_LAST_ORDER (列 ['LAST_ORDER_ID']) 在目标端未找到。           │
+└─────────────────────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                7. 序列 (SEQUENCE) 一致性检查 (共 10 项差异)                                                
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Schema 映射                                 ┃ 差异详情                                                                                   ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ ORA_REF->OB_STAGE                           │ - 缺失: ['SEQ_CHANNEL', 'SEQ_PRODUCT']                                                     │
+│                                             │                                                                                            │
+│ ORA_REF->OB_DIM                             │ - 缺失: ['SEQ_REGION']                                                                     │
+│                                             │                                                                                            │
+│ ORA_TXN->OB_APP                             │ - 缺失: ['SEQ_ORDER', 'SEQ_ORDER_LINE']                                                    │
+│                                             │                                                                                            │
+│ ORA_DIGITAL->OB_STREAM                      │ - 缺失: ['SEQ_EVENT']                                                                      │
+│                                             │                                                                                            │
+│ ORA_BILL->OB_LEDGER                         │ - 缺失: ['SEQ_INVOICE']                                                                    │
+│                                             │                                                                                            │
+│ ORA_SEC->OB_SEC                             │ - 缺失: ['SEQ_USER']                                                                       │
+│                                             │                                                                                            │
+│ ORA_AUDIT->OB_AUDIT                         │ - 缺失: ['SEQ_AUDIT']                                                                      │
+│                                             │                                                                                            │
+│ ORA_PLAN->OB_PLAN                           │ - 缺失: ['SEQ_PLAN']                                                                       │
+│                                             │                                                                                            │
+│ ORA_MDM->OB_MDM                             │ - 缺失: ['SEQ_ATTR']                                                                       │
+│                                             │                                                                                            │
+│ ORA_ML->OB_ML                               │ - 缺失: ['SEQ_MODEL']                                                                      │
+│                                             │                                                                                            │
+└─────────────────────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────┘
+                                               8. 触发器 (TRIGGER) 一致性检查 (共 16 项差异)                                                
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ 表名                                        ┃ 差异详情                                                                                   ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ OB_AUDIT.AUDIT_LOG                          │ - 缺失: ['TRG_AUDIT_LOG_BI']                                                               │
+│                                             │                                                                                            │
+│ OB_AUDIT.JOB_STATUS                         │ * Oracle 用户已成功查询，但 ALL_TRIGGERS                                                   │
+│                                             │ 在该表没有返回记录，请确认源端是否确实存在触发器。                                         │
+│ OB_PLAN.FORECAST_PLAN                       │ * Oracle 用户已成功查询，但 ALL_TRIGGERS                                                   │
+│                                             │ 在该表没有返回记录，请确认源端是否确实存在触发器。                                         │
+│ OB_MDM.ATTRIBUTE_DEF                        │ * Oracle 用户已成功查询，但 ALL_TRIGGERS                                                   │
+│                                             │ 在该表没有返回记录，请确认源端是否确实存在触发器。                                         │
+│ OB_ML.MODEL_VERSION                         │ * Oracle 用户已成功查询，但 ALL_TRIGGERS                                                   │
+│                                             │ 在该表没有返回记录，请确认源端是否确实存在触发器。                                         │
+│ OB_ML.MODEL_RUN                             │ * Oracle 用户已成功查询，但 ALL_TRIGGERS                                                   │
+│                                             │ 在该表没有返回记录，请确认源端是否确实存在触发器。                                         │
+│ OB_DIM.REGION_DIM                           │ * Oracle 用户已成功查询，但 ALL_TRIGGERS                                                   │
+│                                             │ 在该表没有返回记录，请确认源端是否确实存在触发器。                                         │
+│ OB_STAGE.CHANNEL_DIM                        │ * Oracle 用户已成功查询，但 ALL_TRIGGERS                                                   │
+│                                             │ 在该表没有返回记录，请确认源端是否确实存在触发器。                                         │
+│ OB_STAGE.PRODUCT_CATEGORY                   │ * Oracle 用户已成功查询，但 ALL_TRIGGERS                                                   │
+│                                             │ 在该表没有返回记录，请确认源端是否确实存在触发器。                                         │
+│ OB_APP.F_ORDER                              │ - 缺失: ['TRG_SALES_ORDER_BI']                                                             │
+│                                             │                                                                                            │
+│ OB_APP.F_ORDER_LINE                         │ * Oracle 用户已成功查询，但 ALL_TRIGGERS                                                   │
+│                                             │ 在该表没有返回记录，请确认源端是否确实存在触发器。                                         │
+│ OB_STREAM.STREAM_EVENT                      │ * Oracle 用户已成功查询，但 ALL_TRIGGERS                                                   │
+│                                             │ 在该表没有返回记录，请确认源端是否确实存在触发器。                                         │
+│ OB_LEDGER.INVOICE_HEADER                    │ - 缺失: ['TRG_INVOICE_HEADER_BI']                                                          │
+│                                             │                                                                                            │
+│ OB_LEDGER.INVOICE_LINE                      │ * Oracle 用户已成功查询，但 ALL_TRIGGERS                                                   │
+│                                             │ 在该表没有返回记录，请确认源端是否确实存在触发器。                                         │
+│ OB_SEC.ROLE_POLICY                          │ * Oracle 用户已成功查询，但 ALL_TRIGGERS                                                   │
+│                                             │ 在该表没有返回记录，请确认源端是否确实存在触发器。                                         │
+│ OB_SEC.USER_MATRIX                          │ * Oracle 用户已成功查询，但 ALL_TRIGGERS                                                   │
+│                                             │ 在该表没有返回记录，请确认源端是否确实存在触发器。                                         │
+└─────────────────────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                         9. 依赖关系校验 (共 42 项)                                                         
+┏┳━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃┃ 依赖对象                  ┃  ┃ 被依赖对象                ┃  ┃ 修复建议                                                                  ┃
+┡╇━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+││ OB_ANALYTICS.VW_REGION_P… │  │ OB_APP.F_ORDER            │  │ 依赖对象 OB_ANALYTICS.VW_REGION_PROMISE (VIEW)                            │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_ANALYTICS.VW_REGION_P… │  │ OB_DIM.REGION_DIM         │  │ 依赖对象 OB_ANALYTICS.VW_REGION_PROMISE (VIEW)                            │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_APP.FN_ORDER_TOTAL     │  │ OB_APP.F_ORDER_LINE       │  │ 依赖对象 OB_APP.FN_ORDER_TOTAL (FUNCTION)                                 │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_APP.PKG_ORDER_ROUTER   │  │ OB_APP.PKG_ORDER_ROUTER   │  │ 依赖对象 OB_APP.PKG_ORDER_ROUTER (PACKAGE BODY)                           │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_APP.PKG_ORDER_ROUTER   │  │ OB_DIM.REGION_DIM         │  │ 依赖对象 OB_APP.PKG_ORDER_ROUTER (PACKAGE BODY)                           │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_APP.SP_CLOSE_ORDER     │  │ OB_APP.F_ORDER            │  │ 依赖对象 OB_APP.SP_CLOSE_ORDER (PROCEDURE)                                │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_APP.TRG_SALES_ORDER_BI │  │ OB_APP.F_ORDER            │  │ 依赖对象 OB_APP.TRG_SALES_ORDER_BI (TRIGGER)                              │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_APP.TRG_SALES_ORDER_BI │  │ OB_APP.SEQ_ORDER          │  │ 依赖对象 OB_APP.TRG_SALES_ORDER_BI (TRIGGER)                              │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_AUDIT.FN_LAST_JOB      │  │ OB_AUDIT.JOB_STATUS       │  │ 依赖对象 OB_AUDIT.FN_LAST_JOB (FUNCTION)                                  │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_AUDIT.SP_ARCHIVE_LOG   │  │ OB_AUDIT.JOB_STATUS       │  │ 依赖对象 OB_AUDIT.SP_ARCHIVE_LOG (PROCEDURE)                              │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_AUDIT.TRG_AUDIT_LOG_BI │  │ OB_AUDIT.AUDIT_LOG        │  │ 依赖对象 OB_AUDIT.TRG_AUDIT_LOG_BI (TRIGGER)                              │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_AUDIT.TRG_AUDIT_LOG_BI │  │ OB_AUDIT.SEQ_AUDIT        │  │ 依赖对象 OB_AUDIT.TRG_AUDIT_LOG_BI (TRIGGER)                              │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_AUDIT.VW_AUDIT_SUMMARY │  │ OB_AUDIT.AUDIT_LOG        │  │ 依赖对象 OB_AUDIT.VW_AUDIT_SUMMARY (VIEW)                                 │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_FIN.PKG_BILLING_CORE   │  │ OB_FIN.PKG_BILLING_CORE   │  │ 依赖对象 OB_FIN.PKG_BILLING_CORE (PACKAGE BODY)                           │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_FIN.PKG_BILLING_CORE   │  │ OB_FIN.SP_POST_INVOICE    │  │ 依赖对象 OB_FIN.PKG_BILLING_CORE (PACKAGE BODY)                           │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_FIN.PKG_BILLING_CORE   │  │ OB_LEDGER.INVOICE_HEADER  │  │ 依赖对象 OB_FIN.PKG_BILLING_CORE (PACKAGE BODY)                           │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_FIN.SP_POST_INVOICE    │  │ OB_LEDGER.INVOICE_HEADER  │  │ 依赖对象 OB_FIN.SP_POST_INVOICE (PROCEDURE)                               │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_FIN.T_INVOICE_SUMMARY  │  │ OB_FIN.T_INVOICE_SUMMARY  │  │ 依赖对象 OB_FIN.T_INVOICE_SUMMARY (TYPE BODY)                             │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_LEDGER.TRG_INVOICE_HE… │  │ OB_LEDGER.INVOICE_HEADER  │  │ 依赖对象 OB_LEDGER.TRG_INVOICE_HEADER_BI (TRIGGER)                        │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_LEDGER.TRG_INVOICE_HE… │  │ OB_LEDGER.SEQ_INVOICE     │  │ 依赖对象 OB_LEDGER.TRG_INVOICE_HEADER_BI (TRIGGER)                        │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_LEDGER.VW_OVERDUE_INV… │  │ OB_LEDGER.INVOICE_HEADER  │  │ 依赖对象 OB_LEDGER.VW_OVERDUE_INVOICE (VIEW)                              │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_MDM.SP_REFRESH_ATTRIB… │  │ OB_MDM.ATTRIBUTE_DEF      │  │ 依赖对象 OB_MDM.SP_REFRESH_ATTRIBUTE (PROCEDURE)                          │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_MDM.SP_REFRESH_ATTRIB… │  │ OB_MDM.SEQ_ATTR           │  │ 依赖对象 OB_MDM.SP_REFRESH_ATTRIBUTE (PROCEDURE)                          │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_MDM.T_DESC_LIST        │  │ OB_MDM.T_DESC_LIST        │  │ 依赖对象 OB_MDM.T_DESC_LIST (TYPE BODY)                                   │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_ML.FN_SCORE_MODEL      │  │ OB_APP.F_ORDER            │  │ 依赖对象 OB_ML.FN_SCORE_MODEL (FUNCTION)                                  │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_ML.SP_REGISTER_MODEL   │  │ OB_ML.MODEL_VERSION       │  │ 依赖对象 OB_ML.SP_REGISTER_MODEL (PROCEDURE)                              │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_PLAN.PKG_PLAN_SIM      │  │ OB_APP.F_ORDER            │  │ 依赖对象 OB_PLAN.PKG_PLAN_SIM (PACKAGE BODY)                              │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_PLAN.PKG_PLAN_SIM      │  │ OB_PLAN.FORECAST_PLAN     │  │ 依赖对象 OB_PLAN.PKG_PLAN_SIM (PACKAGE BODY)                              │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_PLAN.PKG_PLAN_SIM      │  │ OB_PLAN.PKG_PLAN_SIM      │  │ 依赖对象 OB_PLAN.PKG_PLAN_SIM (PACKAGE BODY)                              │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_PLAN.PKG_PLAN_SIM      │  │ OB_PLAN.SEQ_PLAN          │  │ 依赖对象 OB_PLAN.PKG_PLAN_SIM (PACKAGE BODY)                              │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_PLAN.SP_PUBLISH_PLAN   │  │ OB_PLAN.FORECAST_PLAN     │  │ 依赖对象 OB_PLAN.SP_PUBLISH_PLAN (PROCEDURE)                              │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_RPT.VW_ORDER_REGION    │  │ OB_APP.F_ORDER            │  │ 依赖对象 OB_RPT.VW_ORDER_REGION (VIEW)                                    │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_RPT.VW_ORDER_REGION    │  │ OB_DIM.REGION_DIM         │  │ 依赖对象 OB_RPT.VW_ORDER_REGION (VIEW)                                    │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_SEC.FN_IS_ALLOWED      │  │ OB_SEC.ROLE_POLICY        │  │ 依赖对象 OB_SEC.FN_IS_ALLOWED (FUNCTION)                                  │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_SEC.SP_GRANT_ROLE      │  │ OB_SEC.USER_MATRIX        │  │ 依赖对象 OB_SEC.SP_GRANT_ROLE (PROCEDURE)                                 │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_SEC.VW_ACTIVE_USERS    │  │ OB_SEC.USER_MATRIX        │  │ 依赖对象 OB_SEC.VW_ACTIVE_USERS (VIEW)                                    │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_SHARE.SYN_INVOICE      │  │ OB_LEDGER.INVOICE_HEADER  │  │ 依赖对象 OB_SHARE.SYN_INVOICE (SYNONYM)                                   │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_SHARE.SYN_ORDER        │  │ OB_APP.F_ORDER            │  │ 依赖对象 OB_SHARE.SYN_ORDER (SYNONYM)                                     │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_SHARE.SYN_POST_PROC    │  │ OB_FIN.SP_POST_INVOICE    │  │ 依赖对象 OB_SHARE.SYN_POST_PROC (SYNONYM)                                 │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_SHARE.SYN_REGION       │  │ OB_DIM.REGION_DIM         │  │ 依赖对象 OB_SHARE.SYN_REGION (SYNONYM)                                    │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_STREAM.SP_RECALC_FEAT… │  │ OB_STREAM.T_FEATURE_VECT… │  │ 依赖对象 OB_STREAM.SP_RECALC_FEATURES (PROCEDURE)                         │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+││ OB_STREAM.T_FEATURE_VECT… │  │ OB_STREAM.T_FEATURE_VECT… │  │ 依赖对象 OB_STREAM.T_FEATURE_VECTOR (TYPE BODY)                           │
+││                           │  │                           │  │ 在目标端缺失，请补齐该对象后再重新编译依赖。                              │
+└┴───────────────────────────┴──┴───────────────────────────┴──┴───────────────────────────────────────────────────────────────────────────┘
+                                                          10. 授权建议 (共 12 条)                                                           
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ 授权对象                                    ┃ 语句                                                                                       ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ OB_ANALYTICS                                │ GRANT SELECT ON OB_APP.F_ORDER TO OB_ANALYTICS;                                            │
+│                                             │ GRANT SELECT ON OB_DIM.REGION_DIM TO OB_ANALYTICS;                                         │
+│ OB_APP                                      │ GRANT SELECT ON OB_DIM.REGION_DIM TO OB_APP;                                               │
+│ OB_FIN                                      │ GRANT SELECT ON OB_LEDGER.INVOICE_HEADER TO OB_FIN;                                        │
+│ OB_ML                                       │ GRANT SELECT ON OB_APP.F_ORDER TO OB_ML;                                                   │
+│ OB_PLAN                                     │ GRANT SELECT ON OB_APP.F_ORDER TO OB_PLAN;                                                 │
+│ OB_RPT                                      │ GRANT SELECT ON OB_APP.F_ORDER TO OB_RPT;                                                  │
+│                                             │ GRANT SELECT ON OB_DIM.REGION_DIM TO OB_RPT;                                               │
+│ OB_SHARE                                    │ GRANT EXECUTE ON OB_FIN.SP_POST_INVOICE TO OB_SHARE;                                       │
+│                                             │ GRANT SELECT ON OB_APP.F_ORDER TO OB_SHARE;                                                │
+│                                             │ GRANT SELECT ON OB_DIM.REGION_DIM TO OB_SHARE;                                             │
+│                                             │ GRANT SELECT ON OB_LEDGER.INVOICE_HEADER TO OB_SHARE;                                      │
+└─────────────────────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                       4. 无效的 Remap 规则 (共 3 个)                                                       
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ 在 remap_rules.txt 中定义, 但在源端 Oracle 中未找到的对象                                                                                ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ ORA_BILL.T_INVOICE_SUMMARY BODY                                                                                                          │
+│ ORA_DIGITAL.T_FEATURE_VECTOR BODY                                                                                                        │
+│ ORA_MDM.T_DESC_LIST BODY                                                                                                                 │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+╭────────────────────────────── 提示 ──────────────────────────────╮
+│ Fixup 脚本生成目录                                               │
+│                                                                  │
+│ fix_up/table         : 缺失 TABLE 的 CREATE 脚本                 │
+│ fix_up/view          : 缺失 VIEW 的 CREATE 脚本                  │
+│ fix_up/materialized_view : 缺失 MATERIALIZED VIEW 的 CREATE 脚本 │
+│ fix_up/procedure     : 缺失 PROCEDURE 的 CREATE 脚本             │
+│ fix_up/function      : 缺失 FUNCTION 的 CREATE 脚本              │
+│ fix_up/package       : 缺失 PACKAGE 的 CREATE 脚本               │
+│ fix_up/package_body  : 缺失 PACKAGE BODY 的 CREATE 脚本          │
+│ fix_up/synonym       : 缺失 SYNONYM 的 CREATE 脚本               │
+│ fix_up/job           : 缺失 JOB 的 CREATE 脚本                   │
+│ fix_up/schedule      : 缺失 SCHEDULE 的 CREATE 脚本              │
+│ fix_up/type          : 缺失 TYPE 的 CREATE 脚本                  │
+│ fix_up/type_body     : 缺失 TYPE BODY 的 CREATE 脚本             │
+│ fix_up/index         : 缺失 INDEX 的 CREATE 脚本                 │
+│ fix_up/constraint    : 缺失约束的 CREATE 脚本                    │
+│ fix_up/sequence      : 缺失 SEQUENCE 的 CREATE 脚本              │
+│ fix_up/trigger       : 缺失 TRIGGER 的 CREATE 脚本               │
+│ fix_up/grants        : 依赖对象所需的授权脚本                    │
+│ fix_up/table_alter   : 列不匹配 TABLE 的 ALTER 修补脚本          │
+│                                                                  │
+│ 请在 OceanBase 执行前逐一人工审核上述脚本。                      │
+╰──────────────────────────────────────────────────────────────────╯
+╭──────────╮
+│ 报告结束 │
+╰──────────╯

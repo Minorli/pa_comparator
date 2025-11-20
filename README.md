@@ -22,7 +22,7 @@ This toolkit automates end-to-end validation for Oracle → OceanBase migrations
 | `fix_up/` | 最近一次校验生成的修补脚本（含 `grants/`, `table_alter/`, 以及各对象类型子目录）。 |
 | `history/` | 旧版本脚本 & `dbcat_output/` 缓存（避免重复导出 DDL）。 |
 | `reports/` | `rich` 渲染的文本报告，文件名格式 `report_<timestamp>.txt`。 |
-| `test_scenarios/` | `hydra_matrix_case` 与 `spiderweb_case` 两套完整样例（DDL、Remap、场景说明）。 |
+| `test_scenarios/` | `hydra_matrix_case` 样例（包含 DDL、Remap、场景说明）。 |
 | `requirements.txt` | Python 依赖（`oracledb`, `rich`）。 |
 | `DESIGN.md` | 设计/架构说明。 |
 
@@ -143,8 +143,8 @@ python3 final_fix.py [optional/path/to/db.ini]
 ## Sample scenarios & history
 
 - `test_scenarios/hydra_matrix_case`：多 schema、多 remap 的组合案例，模拟企业级项目。
-- `test_scenarios/spiderweb_case`：覆盖所有对象类型/依赖的“蜘蛛网”场景，适合做回归测试。
 - `history/db_comparator_*.py`：旧版本脚本留档，可参考排查差异。
+（当前仓库仅包含 Hydra 场景，Spiderweb 场景未随仓库提供。）
 
 ---
 

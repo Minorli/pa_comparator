@@ -1,67 +1,68 @@
-# Hydra Matrix 10→15 Schema Stress Scenario
+# Hydra Matrix Scenario (Complex Remap Coverage)
 
-This scenario fabricates ten busy Oracle schemas (core, orders, logistics, reference data, analytics, audit, billing, security, utilities, and machine learning) and remaps them across **fifteen** OceanBase schemas (`OB_MASTER`, `OB_APP`, `OB_DW`, `OB_ANALYTICS`, `OB_SUPPLY`, `OB_STREAM`, `OB_REF`, `OB_STAGE`, `OB_SHARE`, `OB_AUDIT`, `OB_BILL`, `OB_FIN`, `OB_SEC`, `OB_ML`, `OB_ODS`).  Every schema boundary is crossed at least once: tables depend on dimensions maintained in a different schema, PL/SQL units hop across three destinations, and synonyms jump twice.  The OceanBase script intentionally leaves holes (missing columns, packages, sequences, triggers, and synonyms) and sprinkles extra tables/sequences to ensure the comparator exhausts every report path.
+This edition of Hydra Matrix builds **eleven** fully functional Oracle schemas and remaps their objects across **fourteen** OceanBase schemas to exercise every feature in `db_comparator_fixup_release.py`.  The Oracle script creates every referenced table, sequence, trigger, PL/SQL unit, object type, materialized view, synonym, and view, so it runs cleanly on a brand-new database.  The OceanBase script intentionally recreates only part of the landscape—dropping columns, shortening VARCHAR lengths, omitting sequences/triggers/packages/types, and sprinkling extra artifacts—so each comparator report bucket (missing/mismatched/extraneous/dependency/grant) gets coverage.
 
-## Contents
+## Layout
 
 ```
 test_scenarios/hydra_matrix_case/
-├── README.md                        <- This document
-├── oracle_setup.sql                 <- Oracle-side DDL (10 schemas, 60+ objects)
-├── oceanbase_setup.sql              <- OceanBase-side DDL with deliberate gaps
-└── remap_rules_hydra.txt            <- Cross-schema remap directives (10 -> 15)
+├── README.md
+├── oracle_setup.sql        <- Oracle source-side DDL for 11 schemas
+├── oceanbase_setup.sql     <- OceanBase target-side DDL with intentional gaps
+└── remap_rules_hydra.txt   <- Canonical remap definitions
 ```
 
-## Schema / Object Matrix (Oracle → OceanBase)
+## Schema Matrix
 
-| Source schema | Key objects (non-exhaustive) | Remap target(s) | Notes |
-| ------------- | --------------------------- | --------------- | ----- |
-| `ORA_REF`     | REGION/CHANNEL/SERVICE/SHIP lookup tables, 4 sequences, SP_REFRESH_LOOKUP | `OB_REF`, `OB_STAGE`, `OB_SHARE` | Lookup data split between two OB schemas; stored procedure moves to OB_SHARE even though no table lives there. |
-| `ORA_CORE`    | CUSTOMER_DIM, ADDRESS_DIM, SEQ_CUSTOMER, PKG_CUSTOMER_API, SP_PROFILE_REFRESH | `OB_MASTER`, `OB_ODS`, `OB_APP` | Customer tables jump to two targets; PL/SQL units land in OB_APP, driving cross-tenant grants. |
-| `ORA_ORD`     | ORDER_FACT/LINE, SEQ_ORDER, trigger, package spec/body, procedure, function, VW_OPEN_ORDERS | `OB_DW`, `OB_APP`, `OB_ANALYTICS` | Fact tables shift to DW, PL/SQL to APP, reporting view to ANALYTICS; trigger/sequence land on different targets. |
-| `ORA_FULFILL` | SHIPMENT_FACT/EVENT, sequence, trigger, procedure, VW_DUE_SHIPMENTS | `OB_SUPPLY`, `OB_STREAM`, `OB_ANALYTICS` | Fact + events split, while the analytics view lives elsewhere; all supporting objects remap individually. |
-| `ORA_ANALYTICS` | Three summary views + SP_SNAPSHOT_FACTS | `OB_ANALYTICS` | Serves as the convergence point for facts from four other schemas plus ML outputs. |
-| `ORA_AUDIT`   | AUDIT_LOG, JOB_RUN, two sequences, trigger, SP_PURGE_AUDIT, FN_LAST_JOB_RUN | `OB_AUDIT` | Most objects missing on target, ensuring comparator flags tables/sequences/triggers/PLSQL gaps. |
-| `ORA_BILL`    | INVOICE header/line, sequence, trigger, SP_POST_INVOICE, PKG_BILLING_ENGINE, VW_OVERDUE_INVOICE | `OB_BILL`, `OB_FIN` | Tables stay together but procedure/package/view move into OB_FIN’s financial services schema. |
-| `ORA_SEC`     | USER_MATRIX, ROLE_RIGHTS, SEQ_USER, SP_GRANT_ROLE, FN_IS_AUTHORIZED, VW_ACTIVE_USERS | `OB_SEC` | Entire security domain migrates to OB_SEC; comparator must report missing view/function/table pieces. |
-| `ORA_UTIL`    | Four synonyms, FN_CANARY, PKG_DATA_ROUTER (spec/body) | `OB_SHARE` | Only one synonym survives on the OB side; package and stored procedure vanish to exercise missing synonym/package detection. |
-| `ORA_ML`      | MODEL_VERSION/FEATURE, SEQ_MODEL, SP_REGISTER_MODEL, FN_SCORE_MODEL, VW_FEATURE_COVERAGE | `OB_ML`, `OB_ANALYTICS` (view) | Tables/sequences live in OB_ML while the analytics view remaps into OB_ANALYTICS but stays missing for detection. |
+| Oracle schema | Objects created | Remap target(s) | Coverage purpose |
+| --- | --- | --- | --- |
+| `ORA_REF` | REGION/CHANNEL/PRODUCT dimensions, 3 sequences, refresh proc | `OB_DIM`, `OB_STAGE`, `OB_SHARE` | Column drift, missing constraints, missing sequence, missing proc |
+| `ORA_TXN` | SALES_ORDER / SALES_ORDER_LINE, 2 sequences, trigger, procedure, function, package spec/body, analytic view | `OB_APP`, `OB_ANALYTICS` | Missing trigger/sequence/package body/function/view, extra table, column length mismatch |
+| `ORA_DIGITAL` | STREAM_EVENT, sequence, materialized view, custom object type + body, features proc | `OB_STREAM`, `OB_ANALYTICS` | Missing MV/type body/sequence |
+| `ORA_BILL` | INVOICE tables, sequence, trigger, SP_POST_INVOICE, billing package spec/body, object type, overdue view | `OB_LEDGER`, `OB_FIN` | Missing trigger/proc/package/type, column gaps, extra sequence |
+| `ORA_SEC` | USER_MATRIX + ROLE_POLICY, sequence, grant procedure, function, active-user view | `OB_SEC` | Missing table/program units, grant generation |
+| `ORA_UTIL` | Synonyms into other schemas, canary function, gateway procedure | `OB_SHARE` | Missing synonyms/procedure, synonym remap handling |
+| `ORA_AUDIT` | AUDIT_LOG, JOB_STATUS, sequence, trigger, archive proc, summary function/view | `OB_AUDIT` | Missing trigger/sequence/function/view, unexpected OB objects |
+| `ORA_PLAN` | FORECAST_PLAN table, sequence, publish proc, planning package spec/body referencing REF/TXN | `OB_PLAN` | Missing package body/procedure/table columns |
+| `ORA_MDM` | ATTRIBUTE_DEF table, SEQ_ATTR, custom type + body, refresh proc | `OB_MDM` | Missing type body/procedure/sequence |
+| `ORA_RPT` | Reporting view + materialized view + refresh proc spanning all schemas | `OB_RPT` | Missing MV/view/proc ensures dependency coverage |
+| `ORA_ML` | MODEL_VERSION/RUN tables, sequence, register proc, scoring function | `OB_ML` | Missing function/procedure columns/sequence |
 
-## Execution Steps
+## How to Execute
 
-1. **Provision Oracle schemas and objects.**  Connect as a privileged Oracle user and execute `@test_scenarios/hydra_matrix_case/oracle_setup.sql`.  The script creates ten schemas, complete referential integrity, sequences, trigger, PL/SQL packages, views, and synonyms.
-2. **Deploy OceanBase targets.**  Connect to the Oracle-compatible OceanBase tenant and run `@test_scenarios/hydra_matrix_case/oceanbase_setup.sql`.  Fifteen target schemas are created, but key columns, sequences, packages, and synonyms are intentionally omitted while extra artifacts are added for noise.
-3. **Wire remap rules.**  Point `db.ini` → `[SETTINGS].remap_file = test_scenarios/hydra_matrix_case/remap_rules_hydra.txt` and set `source_schemas = ORA_CORE,ORA_ORD,ORA_FULFILL,ORA_REF,ORA_ANALYTICS,ORA_AUDIT,ORA_BILL,ORA_SEC,ORA_UTIL,ORA_ML`.
-4. **Run the comparator.**  Execute `python3 db_comparator_fixup_release.py` with credentials for both sides.  Review console output plus `fix_up/` artifacts.
+1. **Oracle source**
+   ```sql
+   sqlplus sys/<pwd>@<oracle_dsn> as sysdba
+   @test_scenarios/hydra_matrix_case/oracle_setup.sql
+   ```
+   This provisions eleven schemas with the objects outlined above plus all required cross-schema grants.
 
-## Expected Comparator Findings (Highlights)
+2. **OceanBase target**
+   ```sql
+   obclient -h <host> -P <port> -u <tenant user> -p
+   source test_scenarios/hydra_matrix_case/oceanbase_setup.sql
+   ```
+   The script creates fourteen schemas (`OB_DIM`, `OB_STAGE`, `OB_APP`, `OB_STREAM`, `OB_ANALYTICS`, `OB_LEDGER`, `OB_FIN`, `OB_SEC`, `OB_SHARE`, `OB_AUDIT`, `OB_PLAN`, `OB_MDM`, `OB_RPT`, `OB_ML`) but intentionally:
+   - Removes key columns or constraints (e.g., no VIP/Loyalty columns in `OB_APP.CUSTOMER_DIM`, no REGION_ID in `OB_STAGE.PRODUCT_CATEGORY`).
+   - Leaves VARCHAR lengths shorter than the `ceil(1.5 × source)` rule.
+   - Omits or renames sequences, triggers, materialized views, object types, procedures, package bodies, and synonyms.
+   - Seeds stray objects such as `OB_APP.EXTRA_GHOST_ORDER`, `OB_LEDGER.EXTRA_SEQ_AUDIT`, and `OB_PLAN.EXTRA_PLAN_LOG`.
 
-- **Tables & Column Sets**
-  - `OB_MASTER.CUSTOMER_DIM` drops `VIP_FLAG`, `PREFERRED_CHANNEL_ID`, `LOYALTY_SCORE`, and keeps VARCHAR lengths at the Oracle size (no 1.5× expansion).  FK constraints disappear as well.
-  - `OB_ODS.ADDRESS_DIM`, `OB_SUPPLY.SHIPMENT_FACT`, `OB_STREAM.SHIPMENT_EVENT`, `OB_BILL.INVOICE_HEADER`, and `OB_ML.MODEL_*` lose columns referenced by downstream objects, so the comparator reports missing columns plus FK/count mismatches.
-  - Lookup tables in `OB_STAGE` omit `ONLINE_FLAG`, `DESCRIPTION`, and all FK/unique constraints, generating column gaps and extra-column warnings (`MIGRATION_TAG`).
+3. **Run the comparator**
+   ```
+   [SETTINGS]
+   source_schemas = ORA_REF,ORA_TXN,ORA_DIGITAL,ORA_BILL,ORA_SEC,ORA_UTIL,ORA_AUDIT,ORA_PLAN,ORA_MDM,ORA_RPT,ORA_ML
+   remap_file = test_scenarios/hydra_matrix_case/remap_rules_hydra.txt
+   ```
+   Execute `python3 db_comparator_fixup_release.py` and inspect the console output, report file, and generated `fix_up/` scripts.
 
-- **Sequences, Triggers, Indexes**
-  - `SEQ_REGION`, `SEQ_SERVICE`, `SEQ_SHIP_METHOD`, `SEQ_SHIPMENT`, and `SEQ_AUDIT` are not created on OceanBase even though the remap file expects them.
-  - `TRG_F_ORDER_BI`, `TRG_SHIPMENT_FACT_BI`, and `TRG_INVOICE_HEADER_BI` are missing entirely, while `OB_DW.EXTRA_LOAD_SEQ` and `OB_DW.EXTRA_FACT_GHOST` appear only on OB, showing the “extra object” path.
+## Coverage Highlights
 
-- **Procedures, Functions, Packages**
-  - `OB_APP` omits `SP_PROFILE_REFRESH` and `FN_ORDER_MARGIN`, publishes package specs without bodies (`PKG_CUSTOMER_API`, `PKG_ORDER_WORKFLOW`), and therefore triggers both “missing program unit” and “missing package body” findings.
-  - `OB_AUDIT` has neither `SP_PURGE_AUDIT` nor `FN_LAST_JOB_RUN`; `OB_SUPPLY.SP_CLOSE_SHIPMENT`, `OB_FIN.SP_POST_INVOICE`, `OB_ANALYTICS.SP_SNAPSHOT_FACTS`, and `OB_ML.SP_REGISTER_MODEL` are absent as well.
+- **Primary objects**: Tables, views, materialized views, PL/SQL units, object types, synonyms, and object-type bodies all appear in the remap file.  The OB side omits many of them, ensuring missing-object reports across every category.
+- **Column/length drift**: Several target tables drop columns or use shorter VARCHAR lengths so the comparator emits column-mismatch and length-adjustment scripts.
+- **OMS 列过滤示例**: `OB_STAGE.CHANNEL_DIM` 注入 6 个以 `OMS_` 开头的列，其中 4 个为内置(`OMS_OBJECT_NUMBER/OMS_RELATIVE_FNO/OMS_BLOCK_NUMBER/OMS_ROW_NUMBER`)会被忽略，另外 2 个 (`OMS_EXTRA_FLAG/OMS_AUDIT_NOTE`) 会被报告为目标端多余列。
+- **Extra objects**: Noise tables and sequences on the OB side validate “unexpected object” reporting.
+- **Dependencies and grants**: Cross-schema FKs and program-unit calls span almost every schema.  The comparator must map dependencies through the remap rules and emit `GRANT SELECT/EXECUTE` scripts for dozens of cases.
+- **Fix-up generation**: Missing sequences, triggers, package bodies, types, and synonyms produce fix-up scripts that leverage dbcat DDL, while column mismatches route to `fix_up/table_alter`.
 
-- **Views & Synonyms**
-  - Only two analytics views exist; `VW_OPEN_ORDERS`, `VW_DELIVERY_DELAY`, `VW_DUE_SHIPMENTS`, and `VW_FEATURE_COVERAGE` never show up on the OB side.
-  - `OB_SHARE` defines just one synonym and a canary function, so `SYN_CUSTOMER`, `SYN_ORDER`, `SYN_INVOICE`, `PKG_DATA_ROUTER`, and `SP_REFRESH_LOOKUP` are all reported missing.  `OB_STAGE.EXTRA_LOOKUP_SHADOW` and `OB_AUDIT.EXTRA_EVENT_STUB` count as extra tables.
-
-- **Security & Utility Objects**
-  - `OB_SEC.USER_MATRIX` loses the `CUSTOMER_ID` column and unique constraint; the entire `ROLE_RIGHTS` table, function, and view are missing, guaranteeing FK/constraint deltas.
-  - `OB_REF.REGION_DIM` lacks `ACTIVE_FLAG`, the REGION_CODE unique constraint, and the remapped sequence.
-
-Combined, the scenario produces:
-
-* Missing tables (SHIP_METHOD, INVOICE_LINE, ROLE_RIGHTS, JOB_RUN, etc.).
-* Missing sequences/triggers/functions/procedures/packages/views/synonyms from every Oracle schema.
-* Extra sequences/tables on the OB side for “unexpected object” validation.
-* Column-set drift (missing/excess columns and 1.5× length violations) across OB_MASTER, OB_STAGE, OB_ODS, OB_SUPPLY, OB_ML, and OB_BILL.
-
-Use this scenario when you need a heavy-weight regression suite that stresses remap parsing, column-set comparison, package body detection, and extra-object reporting across fifteen target schemas.
+Use this Hydra Matrix case whenever you need a deterministic regression suite that exercises complex remap networks, dependency analysis, grant generation, and fix-up output in one run.
