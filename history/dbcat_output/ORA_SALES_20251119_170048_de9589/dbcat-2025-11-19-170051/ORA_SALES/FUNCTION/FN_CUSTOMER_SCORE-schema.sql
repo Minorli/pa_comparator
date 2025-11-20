@@ -1,0 +1,15 @@
+DELIMITER $$
+
+CREATE OR REPLACE FUNCTION           FN_CUSTOMER_SCORE (
+    p_customer_id IN NUMBER
+) RETURN NUMBER IS
+    v_score NUMBER;
+BEGIN
+    SELECT NVL(SUM(ORDER_TOTAL), 0) INTO v_score
+      FROM ORA_SALES.ORDER_FACT
+     WHERE CUSTOMER_ID = p_customer_id
+       AND STATUS = 'C';
+    RETURN v_score;
+END;
+$$
+

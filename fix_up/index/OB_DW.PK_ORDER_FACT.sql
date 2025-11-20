@@ -1,4 +1,0 @@
--- 修补缺失的 INDEX PK_ORDER_FACT (表: OB_DW.F_ORDER_METRIC)
--- 本文件由校验工具自动生成，请在 OceanBase 执行前仔细审核。
-
-CREATE UNIQUE INDEX "OB_DW"."PK_ORDER_FACT" ON "OB_DW"."F_ORDER_METRIC" ("ORDER_ID");

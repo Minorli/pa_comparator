@@ -1,5 +1,0 @@
--- 修补缺失的约束 PK_ERROR_LOG (表: OB_AUDIT.ERROR_LOG)
--- 本文件由校验工具自动生成，请在 OceanBase 执行前仔细审核。
-
-ALTER TABLE "OB_AUDIT"."ERROR_LOG" ADD CONSTRAINT "PK_ERROR_LOG" PRIMARY KEY ("ERROR_ID")
-  ENABLE;

@@ -14,6 +14,7 @@ Behavior:
 """
 
 import configparser
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ from typing import Dict, List, Tuple
 
 CONFIG_DEFAULT_PATH = "db.ini"
 DEFAULT_FIXUP_DIR = "fix_up"
+DONE_DIR_NAME = "done"
 
 
 class ConfigError(Exception):
@@ -80,10 +82,10 @@ def build_obclient_command(ob_cfg: Dict[str, str]) -> List[str]:
     ]
 
 
-def collect_sql_files(fixup_dir: Path) -> List[Path]:
+def collect_sql_files(fixup_dir: Path, done_dir_name: str = DONE_DIR_NAME) -> List[Path]:
     """Collect every *.sql file inside first-level subdirectories of fix_up."""
     sql_files: List[Path] = []
-    for group in sorted(p for p in fixup_dir.iterdir() if p.is_dir()):
+    for group in sorted(p for p in fixup_dir.iterdir() if p.is_dir() and p.name != done_dir_name):
         for sql_file in sorted(group.glob("*.sql")):
             if sql_file.is_file():
                 sql_files.append(sql_file)
@@ -119,6 +121,9 @@ def main() -> None:
     except Exception as exc:  # unexpected IO errors, permission issues, etc.
         print(f"[致命错误] 无法读取配置: {exc}", file=sys.stderr)
         sys.exit(1)
+
+    done_dir = fixup_dir / DONE_DIR_NAME
+    done_dir.mkdir(exist_ok=True)
 
     sql_files = collect_sql_files(fixup_dir)
     if not sql_files:
@@ -156,8 +161,17 @@ def main() -> None:
 
         result = run_sql(obclient_cmd, sql_text)
         if result.returncode == 0:
-            results.append(ScriptResult(relative_path, "SUCCESS"))
-            print(f"{label} {relative_path} -> 成功")
+            move_note = ""
+            try:
+                target_dir = done_dir / sql_path.parent.name
+                target_dir.mkdir(parents=True, exist_ok=True)
+                target_path = target_dir / sql_path.name
+                shutil.move(str(sql_path), target_path)
+                move_note = f"(已移至 {target_path.relative_to(repo_root)})"
+            except Exception as exc:
+                move_note = f"(移动到 done 目录失败: {exc})"
+            results.append(ScriptResult(relative_path, "SUCCESS", move_note.strip()))
+            print(f"{label} {relative_path} -> 成功 {move_note}")
         else:
             stderr = (result.stderr or "").strip()
             results.append(ScriptResult(relative_path, "FAILED", stderr))
@@ -181,7 +195,7 @@ def main() -> None:
     for item in results:
         display_path = str(item.path)
         if item.status == "SUCCESS":
-            message = "成功"
+            message = item.message or "成功"
         elif item.status == "SKIPPED":
             message = item.message or "跳过"
         elif item.status == "ERROR":

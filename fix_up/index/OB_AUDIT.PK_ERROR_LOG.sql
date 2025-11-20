@@ -1,4 +1,0 @@
--- 修补缺失的 INDEX PK_ERROR_LOG (表: OB_AUDIT.ERROR_LOG)
--- 本文件由校验工具自动生成，请在 OceanBase 执行前仔细审核。
-
-CREATE UNIQUE INDEX "OB_AUDIT"."PK_ERROR_LOG" ON "OB_AUDIT"."ERROR_LOG" ("ERROR_ID");
