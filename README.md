@@ -1,6 +1,11 @@
 # OceanBase Comparator Toolkit
 
-This toolkit automates end-to-end validation for Oracle → OceanBase migrations that run in Oracle compatibility mode. It performs a single metadata dump on both sides, compares every managed object, flags dependency gaps, and—when asked—generates ready-to-review fix-up scripts plus the `obclient` runner that applies them.
+🚀 **极简必看用法**  
+1. 先在目标机准备好 Python 3.7（3.6 也可）、Oracle Instant Client、obclient、JDK+dbcat，设置好 `LD_LIBRARY_PATH` / `JAVA_HOME`。  
+2. `python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`  
+3. 配置 `config.ini`（路径用绝对路径，`generate_fixup` 默认开启会生成修补脚本）。  
+4. `python schema_diff_reconciler.py` → 输出 `main_reports/` 和 `fixup_scripts/`。  
+5. 审核后执行 `python run_fixup.py` 自动跑脚本，可多次重试。
 
 ## Highlights
 
@@ -31,7 +36,7 @@ This toolkit automates end-to-end validation for Oracle → OceanBase migrations
 
 ### Runtime & external tools
 
-1. Linux + Python 3.8+（已在 3.11 上验证）。
+1. Linux + Python 3.7（3.6 也可；更高版本如 3.11 亦已验证）。
 2. Oracle Instant Client 19c+，并设置 `LD_LIBRARY_PATH` 指向解压目录（`oracle_client_lib_dir` 也需配置）。
 3. `obclient` 客户端以及访问 Oracle/OceanBase 的网络。
 4. `dbcat` CLI（例如 `dbcat-2.5.0-SNAPSHOT`），以及可用的 `JAVA_HOME`。dbcat 用于批量导出源端 DDL，是修补脚本生成的核心。

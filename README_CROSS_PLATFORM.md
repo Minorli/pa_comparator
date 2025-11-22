@@ -1,198 +1,137 @@
-# 数据库对象对比工具 - 跨平台打包与执行指南
+# 数据库对象对比工具 - 跨平台打包与执行指南 (Wheelhouse 版)
 
-本文档旨在指导用户如何将本 Python 程序打包，并移植到另一台（目标）机器上执行。目标平台可能是 Python 3.6 或 3.7 的环境。
+> 适用场景：需要把当前目录下的 Python 程序（保持源码不改）打包到另一台机器运行，目标 Python 可能是 3.6/3.7.8，且目标机可能无法联网。本文只使用 wheelhouse+venv，不用 PyInstaller。
 
-## 1. 简介
+## 0. 环境与外部依赖清单（目标机必须具备）
+- **Python 解释器**：与打包时的版本和架构匹配（建议提前在目标机装好 3.6.x 或 3.7.x，对应 cp36/cp37）。  
+- **Oracle Instant Client**：供 `oracledb` Thick Mode 使用，版本建议 19c+，架构需匹配目标机。  
+- **obclient**：可直连目标 OceanBase 并有足够权限。  
+- **JDK + dbcat**：dbcat 依赖 JDK（8/11/17 均可），需准备 dbcat 可执行目录（如 `dbcat-2.5.0-SNAPSHOT`）。  
+- **网络/权限**：能访问源 Oracle、目标 OceanBase；目标目录需写权限（生成报告/脚本/缓存）。  
+- **系统库**：Linux 下需要可用的 glibc（oracledb manylinux 轮子要求），并能设置 `LD_LIBRARY_PATH`。
 
-本工具套件包含两个核心程序：
-1.  `schema_diff_reconciler.py`: 用于对比源端 Oracle 数据库与目标端 OceanBase 数据库的 Schema 对象差异，并生成修复用的 SQL 脚本。
-2.  `run_fixup.py`: 用于自动执行 `schema_diff_reconciler.py` 生成的修复脚本。
-
-为了在没有预装 Python 环境或依赖库的目标机器上运行，我们使用 `PyInstaller` 进行打包。
-
-## 2. 核心依赖
-
-在**目标机器**上，即使有了打包好的程序，仍然必须准备好以下**外部依赖**：
-
-- **Oracle Instant Client**:
-  - 这是 `oracledb` 库在 "Thick Mode" 下运行所必需的。
-  - 下载地址：[Oracle Instant Client Downloads](https://www.oracle.com/database/technologies/instant-client/downloads.html)
-  - **注意**: 请下载与目标机器操作系统和架构匹配的版本（如 `Linux x86-64`）。版本建议 19c 或更高。
-
-- **OceanBase Client (`obclient`)**:
-  - 用于连接目标端 OceanBase 并执行查询和脚本。
-  - 需要确保其版本与目标 OceanBase 集群兼容。
-
-- **Java Development Kit (JDK)**:
-  - 这是 `dbcat` 工具运行所必需的。`dbcat` 用于从源端 Oracle 提取 DDL。
-  - 建议安装 JDK 8 或更高版本。
-
-## 3. 打包步骤（在开发机上操作）
-
-以下步骤描述了如何利用 `PyInstaller` 将 Python 程序打包成可执行文件。
-
-### 3.1. 创建虚拟环境
-
-为了隔离依赖，强烈建议在项目根目录下创建一个虚拟环境。
-
+## 1. 在构建机准备 wheelhouse（与目标机 Python/架构匹配）
+1) 安装与目标一致的 Python 版本（尽量同一个小版本，例如目标 3.7.8→构建机用 3.7.x）。  
+2) 创建虚拟环境：
 ```bash
-# 创建名为 .venv 的虚拟环境
 python3 -m venv .venv
-
-# 激活虚拟环境 (Linux/macOS)
 source .venv/bin/activate
-
-# 如果是 Windows
-# .venv\Scripts\activate
 ```
-
-### 3.2. 安装依赖
-
-在激活的虚拟环境中，安装所有必要的 Python 库。
-
+3) 生成 wheelhouse（默认当前平台/当前 Python）：
 ```bash
-pip install -r requirements.txt
-
-# 同时安装 PyInstaller
-pip install pyinstaller
+mkdir -p wheelhouse
+pip wheel --wheel-dir=./wheelhouse -r requirements.txt
 ```
-
-### 3.3. 使用 PyInstaller 打包
-
-我们将同时打包两个主脚本。PyInstaller 会为每个脚本生成一个对应的可执行文件。
-
+4) 若需为其他平台/小版本打包（例如构建机 macOS，目标 Linux x86_64 + Python 3.6/3.7），先在目标机跑：
 ```bash
-# 在项目根目录下执行
-pyinstaller --clean --onefile \
-  schema_diff_reconciler.py \
-  run_fixup.py
+pip debug --verbose | grep -E "py.implementation|platforms"
 ```
+然后在构建机用对应标签生成轮子（示例：Linux x86_64 + Python 3.7）：
+```bash
+pip wheel --wheel-dir=./wheelhouse -r requirements.txt \
+  --python-version 37 \
+  --platform manylinux2014_x86_64 \
+  --implementation cp \
+  --only-binary :all:
+```
+> 提示：oracledb 轮子只提供受支持的平台标签；macOS→Linux/aarch64 通常不可行，尽量在目标同架构的机器生成。
 
-- `--onefile`: 将所有依赖打包进一个单独的可执行文件中。
-- `--clean`: 在打包前清理 PyInstaller 的缓存。
-
-打包成功后，你会在项目根目录下看到一个 `dist` 目录，其中包含两个可执行文件：`schema_diff_reconciler` 和 `run_fixup`。
-
-### 3.4. 准备部署压缩包
-
-为了方便移植，请创建一个压缩包，包含所有需要部署的文件：
-
-- `dist/` 目录下的两个可执行文件。
-- `config.ini` 配置文件。
-- `remap_rules.txt` 规则文件（如果用到）。
-- `dbcat` 工具的完整目录。
-- `Oracle Instant Client` 的完整目录。
-
-例如，创建一个部署包结构如下：
-
+## 2. 打包部署物料（在构建机）
+整理一个可直接拷贝的目录，例如 `deployment_package/`：
 ```
 deployment_package/
-├── schema_diff_reconciler      # 打包后的可执行文件
-├── run_fixup                   # 打包后的可执行文件
-├── config.ini                  # 配置文件
-├── remap_rules.txt             # 映射规则
-├── dbcat-2.5.0-SNAPSHOT/       # dbcat 工具目录
-└── instantclient_19_28/        # Oracle Instant Client 目录
+├── schema_diff_reconciler.py
+├── run_fixup.py
+├── requirements.txt
+├── config.ini                 # 可留模板，目标机再改绝对路径
+├── remap_rules.txt
+├── wheelhouse/                # pip wheel 输出
+├── dbcat-2.5.0-SNAPSHOT/      # 完整 dbcat 目录
+├── instantclient_19_28/       # Oracle Instant Client
+└── setup_env.sh               # （可选）封装环境变量的脚本
 ```
+将目录打包为 `.tar.gz`/`.zip`，拷贝到目标机。
 
-将 `deployment_package` 目录压缩成 `tar.gz` 或 `.zip` 文件，然后拷贝到目标机器。
-
-## 4. 移植与部署（在目标机上操作）
-
-### 4.1. 解压与放置文件
-
-将上一步创建的压缩包上传到目标机器并解压。所有文件将存在于一个独立的目录中，例如 `/home/user/comparator_deploy`。
-
-### 4.2. 设置环境变量
-
-这是**至关重要**的一步。程序依赖环境变量来找到 `Oracle Instant Client` 和 `Java`。
-
-在执行程序前，请在当前 shell 会话中设置以下环境变量：
-
+`setup_env.sh` 示例：
 ```bash
-# 假设你的文件解压在 /home/user/comparator_deploy
-
-# 1. 设置 JAVA_HOME，指向你的 JDK 安装目录
-export JAVA_HOME=/path/to/your/jdk-11.0.2
-
-# 2. 设置 LD_LIBRARY_PATH，指向 Oracle Instant Client 目录
-#    这使得 oracledb 库能找到 .so 共享库文件
+export JAVA_HOME=/home/user/comparator_deploy/jdk-11
 export LD_LIBRARY_PATH=/home/user/comparator_deploy/instantclient_19_28:${LD_LIBRARY_PATH}
+export PATH=/home/user/comparator_deploy/dbcat-2.5.0-SNAPSHOT/bin:${PATH}
+```
+> obclient 若不在 PATH，直接在 `config.ini` 里写绝对路径。
+
+## 3. 在目标机解压与离线安装依赖
+```bash
+cd /path/to/deployment_package   # 例如 /home/user/comparator_deploy
+tar -xzf comparator_package.tar.gz  # 或 unzip
+
+# 创建/激活 venv（确保用目标 Python 3.6/3.7）
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 离线安装依赖
+pip install --no-index --find-links=./wheelhouse -r requirements.txt
+```
+检查：
+```bash
+python -V            # 确认版本
+pip list | grep -E "oracledb|rich"
 ```
 
-**强烈建议**将这些 `export` 命令写入一个 `setup_env.sh` 脚本，每次运行前先 `source setup_env.sh`。
-
-## 5. 配置
-
-在执行前，必须修改 `config.ini` 文件，以适配目标机器的环境。**所有路径都应使用绝对路径**。
-
-请重点检查并修改以下路径相关的配置项：
-
+## 4. 配置 `config.ini`（全部改为绝对路径）
+关键项示例：
 ```ini
-[SETTINGS]
-# remap 规则文件路径
-remap_file              = /home/user/comparator_deploy/remap_rules.txt
-
-# Oracle Instant Client 目录 (必须包含 libclntsh.so)
-# 这个路径必须与 LD_LIBRARY_PATH 中设置的路径一致
-oracle_client_lib_dir   = /home/user/comparator_deploy/instantclient_19_28
-
-# dbcat 配置
-dbcat_bin               = /home/user/comparator_deploy/dbcat-2.5.0-SNAPSHOT
-dbcat_output_dir        = /home/user/comparator_deploy/dbcat_output
-# Java Home (可选，但建议设置，如果 JAVA_HOME 环境变量未全局设置)
-java_home               = /path/to/your/jdk-11.0.2
-
+[ORACLE_SOURCE]
+user=...
+password=...
+dsn=host:port/service
 
 [OCEANBASE_TARGET]
-# obclient 可执行文件的绝对路径
-executable  = /path/to/your/obclient
+executable=/home/user/obclient/bin/obclient
+host=...
+port=...
+user_string=...
+password=...
+
+[SETTINGS]
+source_schemas=...
+remap_file=/home/user/comparator_deploy/remap_rules.txt
+oracle_client_lib_dir=/home/user/comparator_deploy/instantclient_19_28
+dbcat_bin=/home/user/comparator_deploy/dbcat-2.5.0-SNAPSHOT
+dbcat_output_dir=/home/user/comparator_deploy/dbcat_output
+java_home=/home/user/comparator_deploy/jdk-11
+fixup_dir=/home/user/comparator_deploy/fixup_scripts
+report_dir=/home/user/comparator_deploy/main_reports
 ```
+> 端口/用户信息按实际填写；确保目标目录存在写权限。
 
-同时，请确保 `[ORACLE_SOURCE]` 和 `[OCEANBASE_TARGET]` 中的数据库连接信息（用户、密码、IP、端口等）是正确的。
-
-## 6. 执行
-
-完成所有配置后，可以开始执行程序。
-
-### 6.1. 设置环境
-
+## 5. 运行步骤（目标机）
 ```bash
-# 激活环境变量
-source setup_env.sh
-```
-
-### 6.2. 运行对比程序
-
-```bash
-# 切换到部署目录
 cd /home/user/comparator_deploy
+source setup_env.sh           # 设置 JAVA_HOME / LD_LIBRARY_PATH / PATH
+source .venv/bin/activate     # 进入对应 Python 版本的 venv
 
-# 运行 schema 对比
-./schema_diff_reconciler
+# 运行对比
+python schema_diff_reconciler.py   # 如需指定配置: python schema_diff_reconciler.py /path/to/config.ini
+
+# 查看输出
+ls main_reports
+ls fixup_scripts
+
+# 执行修补脚本（可多次重跑）
+python run_fixup.py           # 同样可传 config.ini 路径
 ```
 
-程序会连接数据库，进行对比，并将报告输出到 `main_reports` 目录，修复脚本输出到 `fixup_scripts` 目录。
+## 6. 检查点与常见问题
+- **版本匹配**：`python -V` 与 wheelhouse 标签（cp36/cp37）一致；架构与 wheelhouse 平台一致。  
+- **Instant Client**：`echo $LD_LIBRARY_PATH` 含 instantclient 路径；缺库时报 `libclntsh.so` 找不到。  
+- **JDK/dbcat**：`java -version` 正常；`$JAVA_HOME` 与 `dbcat_bin` 可执行。  
+- **obclient**：可单独执行一条 `obclient -h ... -P ... -u ... -p... -e "select 1;"` 进行连通性验证。  
+- **权限**：输出目录（`fixup_scripts/`, `main_reports/`, `dbcat_output/`）需可写；`config.ini` 含明文密码需妥善保护。  
+- **离线安装失败**：确认 `pip install --no-index --find-links=./wheelhouse` 使用的 Python 版本正确；轮子平台标签是否覆盖目标机；必要时在目标架构重新生成 wheelhouse。  
+- **依赖不足**：oracledb Thick Mode 还依赖 `libaio` 等系统库，请在目标机提前安装（依据操作系统包管理器）。
 
-### 6.3. 运行修复脚本
-
-对比完成后，可以检查 `fixup_scripts` 目录中的 SQL 文件，然后使用 `run_fixup` 执行它们。
-
-```bash
-# 运行修复脚本
-./run_fixup
-```
-
-此脚本会自动查找 `fixup_scripts` 目录下的 SQL 文件并按顺序在 OceanBase 中执行。
-
-## 7. 注意事项
-
-- **平台兼容性**: PyInstaller 打包的可执行文件**不跨平台**。例如，在 Linux 上打包的文件不能在 Windows 上运行。请确保打包环境的操作系统和架构（如 x86-64）与目标机一致。
-- **Python 版本**: PyInstaller 会将打包时使用的 Python 解释器也打包进去。虽然程序本身兼容 Python 3.6/3.7，但建议打包环境的 Python 版本不要高于目标环境太多，以避免潜在的 glibc 版本不兼容问题。
-- **权限**: 确保 `obclient` 和打包后的两个可执行文件都有执行权限 (`chmod +x <filename>`)。同时确保程序对 `fixup_scripts`, `main_reports`, `dbcat_output` 等目录有写入权限。
-- **安全**: `config.ini` 中包含数据库明文密码，请严格控制该文件的访问权限，避免泄露。
-- **问题排查**: 如果执行出错，请首先检查：
-  1. `LD_LIBRARY_PATH` 和 `JAVA_HOME` 是否已正确设置。
-  2. `config.ini` 中的所有路径是否都正确无误。
-  3. 数据库连接信息是否正确，网络是否通畅。
-  4. `obclient` 是否能手动正常连接到 OceanBase。
+## 7. 小结
+- 不修改源码，只通过 wheelhouse + venv 迁移。  
+- 构建机与目标机的 Python/架构要匹配；必要时在目标架构生成 wheelhouse。  
+- 运行前先设置 `JAVA_HOME`/`LD_LIBRARY_PATH` 等外部依赖，再激活 venv 并执行脚本。  
