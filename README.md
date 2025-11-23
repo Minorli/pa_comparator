@@ -1,7 +1,9 @@
 # OceanBase Comparator Toolkit
 
 🚀 **极简必看用法**  
-本程序只有宇哥python程序而没有拆分成无数个模块的原因是，方便程序迭代后，"只传一次到服务器上"，因为你知道向客户的环境传一个打包文件和传一个文本文件难度是不是一样的（文本你可以打开，邮件粘贴到终端里）。
+
+本程序只有一个 python 程序而没有拆分成无数个模块的原因是，方便程序迭代后，"只传一次到服务器上"，因为你知道向客户的环境传一个打包文件和传一个文本文件难度是不是一样的（文本你可以打开，邮件粘贴到终端里）。
+
 1. 先在目标机准备好 Python 3.7（3.6 也可）、Oracle Instant Client、obclient、JDK+dbcat，设置好 `LD_LIBRARY_PATH` / `JAVA_HOME`。  
 2. `python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`  
 3. 配置 `config.ini`（路径用绝对路径，`generate_fixup` 默认开启会生成修补脚本）。  
