@@ -163,11 +163,16 @@ python3 schema_diff_reconciler.py
 
 ```bash
 python3 run_fixup.py [optional/path/to/config.ini]
+# 仅跑指定目录或类型：
+# python3 run_fixup.py --only-dirs table,table_alter
+# python3 run_fixup.py --only-types TABLE,VIEW
+# 只跑匹配的文件名：
+# python3 run_fixup.py --glob \"*202512*.sql\"
 ```
 
 行为：
 1. 读取 `config.ini` 并定位 `fixup_dir`。
-2. 遍历第一层子目录的 `*.sql` 文件，按优先级顺序执行。
+2. 遍历第一层子目录的 `*.sql` 文件，按优先级顺序执行；可用 `--only-dirs/--only-types/--exclude-dirs/--glob` 过滤。
 3. 通过 `obclient` 执行脚本；成功的脚本会移动到 `fixup_scripts/done/<subdir>/`。
 4. 输出详细表格，总结成功/失败/跳过原因，便于重跑。
 

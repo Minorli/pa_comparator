@@ -26,18 +26,40 @@ Behavior:
     * Prints a final summary showing total scripts, successes, failures, and failed file names.
 """
 
+import argparse
 import configparser
+import fnmatch
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 CONFIG_DEFAULT_PATH = "config.ini"
 DEFAULT_FIXUP_DIR = "fixup_scripts"
 DONE_DIR_NAME = "done"
 DEFAULT_OBCLIENT_TIMEOUT = 60
+TYPE_DIR_MAP = {
+    "SEQUENCE": "sequence",
+    "TABLE": "table",
+    "TABLE_ALTER": "table_alter",
+    "CONSTRAINT": "constraint",
+    "INDEX": "index",
+    "VIEW": "view",
+    "MATERIALIZED_VIEW": "materialized_view",
+    "SYNONYM": "synonym",
+    "PROCEDURE": "procedure",
+    "FUNCTION": "function",
+    "PACKAGE": "package",
+    "PACKAGE_BODY": "package_body",
+    "TYPE": "type",
+    "TYPE_BODY": "type_body",
+    "TRIGGER": "trigger",
+    "JOB": "job",
+    "SCHEDULE": "schedule",
+    "GRANTS": "grants",
+}
 
 
 class ConfigError(Exception):
@@ -103,7 +125,13 @@ def build_obclient_command(ob_cfg: Dict[str, str]) -> List[str]:
     ]
 
 
-def collect_sql_files(fixup_dir: Path, done_dir_name: str = DONE_DIR_NAME) -> List[Path]:
+def collect_sql_files(
+    fixup_dir: Path,
+    done_dir_name: str = DONE_DIR_NAME,
+    include_dirs: Optional[List[str]] = None,
+    exclude_dirs: Optional[List[str]] = None,
+    glob_patterns: Optional[List[str]] = None,
+) -> List[Path]:
     """
     Collect *.sql files under the fixup directory with dependency-aware ordering:
       1) sequence → table → table_alter → constraint → index
@@ -130,24 +158,43 @@ def collect_sql_files(fixup_dir: Path, done_dir_name: str = DONE_DIR_NAME) -> Li
         "schedule",
         "grants",
     ]
-    subdirs = {p.name: p for p in fixup_dir.iterdir() if p.is_dir() and p.name != done_dir_name}
+    include_dirs = {d.lower() for d in include_dirs} if include_dirs else None
+    exclude_dirs = {d.lower() for d in exclude_dirs} if exclude_dirs else set()
+    glob_patterns = glob_patterns or ["*.sql"]
+
+    subdirs = {
+        p.name: p
+        for p in fixup_dir.iterdir()
+        if p.is_dir() and p.name != done_dir_name and p.name.lower() not in exclude_dirs
+    }
 
     ordered_groups: List[Path] = []
     seen = set()
     for name in priority:
+        if include_dirs is not None and name.lower() not in include_dirs:
+            continue
         if name in subdirs:
             ordered_groups.append(subdirs[name])
             seen.add(name)
     # Append any remaining subfolders in alpha order to avoid missing custom categories
     for name in sorted(subdirs.keys()):
         if name not in seen:
+            if include_dirs is not None and name.lower() not in include_dirs:
+                continue
             ordered_groups.append(subdirs[name])
 
     sql_files: List[Path] = []
     for group in ordered_groups:
         for sql_file in sorted(group.glob("*.sql")):
-            if sql_file.is_file():
-                sql_files.append(sql_file)
+            if not sql_file.is_file():
+                continue
+            rel_str = str(sql_file.relative_to(fixup_dir))
+            if not any(
+                fnmatch.fnmatch(rel_str, pattern) or fnmatch.fnmatch(sql_file.name, pattern)
+                for pattern in glob_patterns
+            ):
+                continue
+            sql_files.append(sql_file)
     return sql_files
 
 
@@ -170,8 +217,76 @@ class ScriptResult:
     message: str = ""
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Apply fix-up SQL scripts to OceanBase.")
+    parser.add_argument(
+        "config",
+        nargs="?",
+        default=CONFIG_DEFAULT_PATH,
+        help="config.ini path (default: config.ini)",
+    )
+    parser.add_argument(
+        "--only-dirs",
+        action="append",
+        help="Only execute scripts under these subdirectories (comma-separated, case-insensitive).",
+    )
+    parser.add_argument(
+        "--exclude-dirs",
+        action="append",
+        help="Skip these subdirectories (comma-separated, case-insensitive).",
+    )
+    parser.add_argument(
+        "--only-types",
+        action="append",
+        help="Only execute specific object types (e.g. TABLE, VIEW, INDEX).",
+    )
+    parser.add_argument(
+        "--glob",
+        dest="glob_patterns",
+        action="append",
+        help="Only execute scripts whose relative path or filename matches these glob patterns (default: *.sql).",
+    )
+    return parser.parse_args()
+
+
+def parse_csv_args(arg_list: List[str]) -> List[str]:
+    values: List[str] = []
+    for item in arg_list:
+        if not item:
+            continue
+        values.extend([p.strip() for p in item.split(",") if p.strip()])
+    return values
+
+
 def main() -> None:
-    config_arg = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(CONFIG_DEFAULT_PATH)
+    args = parse_args()
+    config_arg = Path(args.config)
+
+    only_dirs = parse_csv_args(args.only_dirs or [])
+    exclude_dirs = parse_csv_args(args.exclude_dirs or [])
+    only_types_raw = parse_csv_args(args.only_types or [])
+
+    mapped_dirs: List[str] = []
+    unknown_types: List[str] = []
+    for t in only_types_raw:
+        key = t.upper().replace(" ", "_")
+        mapped = TYPE_DIR_MAP.get(key)
+        if mapped:
+            mapped_dirs.append(mapped)
+        else:
+            unknown_types.append(t)
+    if unknown_types:
+        print(f"[警告] 未识别的对象类型: {', '.join(unknown_types)} （已忽略）", file=sys.stderr)
+
+    if mapped_dirs:
+        if only_dirs:
+            merged = set(d.lower() for d in only_dirs) | set(d.lower() for d in mapped_dirs)
+            only_dirs = sorted(merged)
+        else:
+            only_dirs = [d.lower() for d in mapped_dirs]
+    else:
+        only_dirs = [d.lower() for d in only_dirs] if only_dirs else []
+    exclude_dirs = [d.lower() for d in exclude_dirs]
 
     try:
         ob_cfg, fixup_dir, repo_root = load_ob_config(config_arg.resolve())
@@ -185,7 +300,12 @@ def main() -> None:
     done_dir = fixup_dir / DONE_DIR_NAME
     done_dir.mkdir(exist_ok=True)
 
-    sql_files = collect_sql_files(fixup_dir)
+    sql_files = collect_sql_files(
+        fixup_dir,
+        include_dirs=set(only_dirs) if only_dirs else None,
+        exclude_dirs=set(exclude_dirs),
+        glob_patterns=args.glob_patterns or None,
+    )
     if not sql_files:
         print(f"[提示] 目录 {fixup_dir} 中未找到任何 *.sql 文件。")
         return
@@ -200,6 +320,12 @@ def main() -> None:
     print(header)
     print("开始执行修补脚本")
     print(f"目录: {fixup_dir}")
+    if only_dirs:
+        print(f"子目录过滤: {sorted(set(only_dirs))}")
+    if exclude_dirs:
+        print(f"跳过子目录: {sorted(set(exclude_dirs))}")
+    if args.glob_patterns:
+        print(f"文件过滤(glob): {args.glob_patterns}")
     print(f"共发现 SQL 文件: {total_scripts}")
     print(header)
 
