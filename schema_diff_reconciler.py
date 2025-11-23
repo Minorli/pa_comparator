@@ -223,16 +223,11 @@ def is_oms_index(name: str, columns: List[str]) -> bool:
     cols_u = [c.strip('"').upper() for c in (columns or []) if c]
     if not cols_u:
         return False
-    # 必须包含 4 个核心 OMS 列
-    if not all(col in cols_u for col in IGNORED_OMS_COLUMNS):
+    # 只忽略“恰好由标准 4 列”构成的索引，避免误滤掉附带额外列的索引
+    if set(cols_u) != set(IGNORED_OMS_COLUMNS) or len(cols_u) != len(IGNORED_OMS_COLUMNS):
         return False
-    # 名称包含 OMS_ROWID 或以 OMS_ROWID 结尾，或列前缀即 OMS 集合
-    if name_u.endswith("OMS_ROWID") or "OMS_ROWID" in name_u:
-        return True
-    prefix = cols_u[:4]
-    if set(prefix) == set(IGNORED_OMS_COLUMNS):
-        return True
-    return False
+    # 名称包含/结尾 OMS_ROWID 时视为标准 OMS 索引
+    return name_u.endswith("OMS_ROWID") or "OMS_ROWID" in name_u
 
 OBJECT_COUNT_TYPES: Tuple[str, ...] = (
     'TABLE',
@@ -782,6 +777,29 @@ def build_schema_mapping(master_list: MasterCheckList) -> Dict[str, str]:
     return final_mapping
 
 
+def compute_schema_coverage(
+    configured_source_schemas: List[str],
+    source_objects: SourceObjectMap,
+    expected_target_schemas: Set[str],
+    ob_meta: ObMetadata
+) -> Dict[str, List[str]]:
+    """
+    计算 schema 层面的覆盖情况：
+      - 源端配置了但未在元数据中找到对象的 schema
+      说明：目标端可能是“超集”，因此不检查“额外 schema”或“目标缺失 schema”。
+    """
+    cfg_src_set = {s.upper() for s in configured_source_schemas}
+    src_seen = {name.split('.')[0].upper() for name in source_objects.keys() if '.' in name}
+    source_missing = sorted(cfg_src_set - src_seen)
+
+    return {
+        "source_missing": source_missing,
+        "target_missing": [],
+        "target_extra": [],
+        "target_missing_schema_hint": []
+    }
+
+
 def compute_object_counts(
     full_object_mapping: FullObjectMapping,
     ob_meta: ObMetadata,
@@ -1296,6 +1314,23 @@ def dump_oracle_metadata(
             if owners:
                 owners_clause = _make_in_clause(owners)
 
+                # 检测是否支持 HIDDEN_COLUMN 字段（部分低版本/权限受限环境不存在）
+                support_hidden_col = False
+                try:
+                    with ora_conn.cursor() as cursor:
+                        cursor.execute("""
+                            SELECT COUNT(*)
+                            FROM ALL_TAB_COLUMNS
+                            WHERE OWNER = 'SYS'
+                              AND TABLE_NAME = 'ALL_TAB_COLUMNS'
+                              AND COLUMN_NAME = 'HIDDEN_COLUMN'
+                        """)
+                        count_row = cursor.fetchone()
+                        support_hidden_col = bool(count_row and count_row[0] and int(count_row[0]) > 0)
+                except oracledb.Error as e:
+                    log.info("无法探测 HIDDEN_COLUMN 支持，默认不读取 hidden 标记：%s", e)
+                    support_hidden_col = False
+
                 # 列定义
                 def _load_ora_tab_columns(include_hidden: bool):
                     hidden_col = ", NVL(TO_CHAR(HIDDEN_COLUMN),'NO') AS HIDDEN_COLUMN" if include_hidden else ""
@@ -1308,8 +1343,20 @@ def dump_oracle_metadata(
                     """
                     return sql
 
-                sql = _load_ora_tab_columns(include_hidden=True)
-                try_hidden = True
+                def _parse_tab_column_row(row, include_hidden: bool) -> Dict:
+                    return {
+                        "data_type": row[3],
+                        "data_length": row[4],
+                        "data_precision": row[5],
+                        "data_scale": row[6],
+                        "nullable": row[7],
+                        "data_default": row[8],
+                        "char_used": row[9],
+                        "char_length": row[10],
+                        "hidden": (row[11] if include_hidden and len(row) > 11 else "NO") == "YES" if include_hidden else False
+                    }
+
+                sql = _load_ora_tab_columns(include_hidden=support_hidden_col)
                 try:
                     with ora_conn.cursor() as cursor:
                         cursor.execute(sql, owners)
@@ -1322,45 +1369,26 @@ def dump_oracle_metadata(
                             key = (owner, table)
                             if key not in table_pairs:
                                 continue
-                            table_columns.setdefault(key, {})[col] = {
-                                "data_type": row[3],
-                                "data_length": row[4],
-                                "data_precision": row[5],
-                                "data_scale": row[6],
-                                "nullable": row[7],
-                                "data_default": row[8],
-                                "char_used": row[9],
-                                "char_length": row[10],
-                                "hidden": (row[11] if len(row) > 11 else "NO") == "YES"
-                            }
+                            table_columns.setdefault(key, {})[col] = _parse_tab_column_row(row, support_hidden_col)
                 except oracledb.Error as e:
-                    log.warning("读取 Oracle ALL_TAB_COLUMNS 含 HIDDEN_COLUMN 失败，回退：%s", e)
-                    try_hidden = False
-
-                if not try_hidden:
-                    sql = _load_ora_tab_columns(include_hidden=False)
-                    with ora_conn.cursor() as cursor:
-                        cursor.execute(sql, owners)
-                        for row in cursor:
-                            owner = _safe_upper(row[0])
-                            table = _safe_upper(row[1])
-                            col = _safe_upper(row[2])
-                            if not owner or not table or not col:
-                                continue
-                            key = (owner, table)
-                            if key not in table_pairs:
-                                continue
-                            table_columns.setdefault(key, {})[col] = {
-                                "data_type": row[3],
-                                "data_length": row[4],
-                                "data_precision": row[5],
-                                "data_scale": row[6],
-                                "nullable": row[7],
-                                "data_default": row[8],
-                                "char_used": row[9],
-                                "char_length": row[10],
-                                "hidden": False
-                            }
+                    if support_hidden_col:
+                        log.info("读取 ALL_TAB_COLUMNS(含 hidden) 失败，尝试不含 hidden：%s", e)
+                        support_hidden_col = False
+                        sql = _load_ora_tab_columns(include_hidden=False)
+                        with ora_conn.cursor() as cursor:
+                            cursor.execute(sql, owners)
+                            for row in cursor:
+                                owner = _safe_upper(row[0])
+                                table = _safe_upper(row[1])
+                                col = _safe_upper(row[2])
+                                if not owner or not table or not col:
+                                    continue
+                                key = (owner, table)
+                                if key not in table_pairs:
+                                    continue
+                                table_columns.setdefault(key, {})[col] = _parse_tab_column_row(row, False)
+                    else:
+                        raise
 
                 # 索引
                 if include_indexes:
@@ -1917,6 +1945,11 @@ def check_primary_objects(
             missing_in_tgt = src_col_names - tgt_col_names
             extra_in_tgt = tgt_col_names - src_col_names
             length_mismatches: List[ColumnLengthIssue] = []
+
+            # 显式提示被忽略名单外的 OMS_* 列属于“多余列”
+            extra_oms = {c for c in extra_in_tgt if c.upper().startswith("OMS_")}
+            if extra_oms:
+                log.debug("表 %s 发现额外 OMS_* 列: %s", full_tgt, sorted(extra_oms))
 
             # 检查公共列的长度
             common_cols = src_col_names & tgt_col_names
@@ -3732,7 +3765,8 @@ def print_final_report(
     required_grants: Optional[Dict[str, Set[Tuple[str, str]]]] = None,
     report_file: Optional[Path] = None,
     object_counts_summary: Optional[ObjectCountSummary] = None,
-    endpoint_info: Optional[Dict[str, Dict[str, str]]] = None
+    endpoint_info: Optional[Dict[str, Dict[str, str]]] = None,
+    schema_summary: Optional[Dict[str, List[str]]] = None
 ):
     custom_theme = Theme({
         "ok": "green",
@@ -3758,6 +3792,12 @@ def print_final_report(
         }
     if required_grants is None:
         required_grants = {}
+    if schema_summary is None:
+        schema_summary = {
+            "source_missing": [],
+            "target_missing": [],
+            "target_extra": []
+        }
 
     log.info("所有校验已完成。正在生成最终报告...")
 
@@ -3778,6 +3818,7 @@ def print_final_report(
     dep_unexpected_cnt = len(dependency_report.get("unexpected", []))
     dep_skipped_cnt = len(dependency_report.get("skipped", []))
     grant_stmt_cnt = sum(len(entries) for entries in required_grants.values())
+    source_missing_schema_cnt = len(schema_summary.get("source_missing", []))
 
     console.print(Panel.fit("[bold]数据库对象迁移校验报告 (V0.5 - Rich)[/bold]", style="title"))
 
@@ -3841,6 +3882,11 @@ def print_final_report(
     )
     summary_table.add_column("Category", justify="left", width=24, no_wrap=True)
     summary_table.add_column("Details", justify="left", width=section_width - 28)
+
+    schema_text = Text()
+    schema_text.append("源 schema 未获取到对象: ", style="mismatch")
+    schema_text.append(f"{source_missing_schema_cnt}")
+    summary_table.add_row("[bold]Schema 覆盖[/bold]", schema_text)
 
     primary_text = Text()
     primary_text.append(f"总计校验对象 (来自源库): {total_checked}\n")
@@ -3932,8 +3978,22 @@ def print_final_report(
 
     console.print(summarize_actions())
 
+    if schema_summary:
+        schema_table = Table(title="[header]0.a Schema 覆盖详情", width=section_width)
+        schema_table.add_column("类别", style="info", width=36)
+        schema_table.add_column("Schema 列表", style="info")
+        has_row = False
+        if schema_summary.get("source_missing"):
+            schema_table.add_row(
+                "源端未获取到对象",
+                ", ".join(schema_summary["source_missing"])
+            )
+            has_row = True
+        if has_row:
+            console.print(schema_table)
+
     if object_counts_summary:
-        count_table = Table(title="[header]0. 检查汇总", **count_table_kwargs)
+        count_table = Table(title="[header]0.b 检查汇总", **count_table_kwargs)
         count_table.add_column("对象类型", style="info", width=TYPE_COL_WIDTH)
         count_table.add_column("Oracle (应校验)", justify="right", width=18)
         count_table.add_column("OceanBase (命中)", justify="right", width=18)
@@ -4219,6 +4279,7 @@ def main():
     }
     required_grants: Dict[str, Set[Tuple[str, str]]] = {}
     object_counts_summary: Optional[ObjectCountSummary] = None
+    schema_summary: Optional[Dict[str, List[str]]] = None
 
     if not master_list:
         log.info("主校验清单为空，程序结束。")
@@ -4247,7 +4308,8 @@ def main():
             required_grants,
             report_path,
             object_counts_summary,
-            endpoint_info
+            endpoint_info,
+            schema_summary
         )
         return
 
@@ -4271,6 +4333,13 @@ def main():
     ob_dependencies: Set[Tuple[str, str, str, str]] = set()
     if enable_dependencies_check:
         ob_dependencies = load_ob_dependencies(ob_cfg, target_schemas)
+
+    schema_summary = compute_schema_coverage(
+        settings['source_schemas_list'],
+        source_objects,
+        target_schemas,
+        ob_meta
+    )
 
     # 7) 主对象校验
     oracle_meta = dump_oracle_metadata(
@@ -4345,7 +4414,8 @@ def main():
         required_grants,
         report_path,
         object_counts_summary,
-        endpoint_info
+        endpoint_info,
+        schema_summary
     )
 
 
