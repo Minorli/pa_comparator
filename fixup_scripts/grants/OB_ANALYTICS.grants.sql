@@ -1,0 +1,5 @@
+-- OB_ANALYTICS 授予跨 schema 依赖对象所需权限
+-- 本文件由校验工具自动生成，请在 OceanBase 执行前仔细审核。
+
+ALTER SESSION SET CURRENT_SCHEMA = OB_ANALYTICS;
+GRANT SELECT ON OB_ANALYTICS.V_ORDER_SUM TO OB_UTIL;
