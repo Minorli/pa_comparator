@@ -74,6 +74,7 @@ from collections import defaultdict, OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Set, List, Tuple, Optional, NamedTuple, Callable
+import textwrap
 
 # 尝试导入 oracledb，如果失败则提示安装
 try:
@@ -445,6 +446,285 @@ def load_config(config_file: str) -> Tuple[OraConfig, ObConfig, Dict]:
     except KeyError as e:
         log.error(f"严重错误: 配置文件中缺少必要的部分: {e}")
         sys.exit(1)
+
+
+def validate_runtime_paths(settings: Dict, ob_cfg: ObConfig) -> None:
+    """在正式连接前，对关键路径和依赖做友好校验与提示。"""
+    errors: List[str] = []
+    warnings: List[str] = []
+
+    # obclient 可执行文件
+    obclient_path = Path(ob_cfg.get('executable', '')).expanduser()
+    if not obclient_path.exists():
+        errors.append(
+            f"未找到 obclient 可执行文件: {obclient_path}。请在 config.ini 的 [OCEANBASE_TARGET] 中配置 executable 绝对路径。"
+        )
+    elif not os.access(obclient_path, os.X_OK):
+        warnings.append(f"obclient 路径存在但不可执行: {obclient_path}，请检查权限。")
+
+    # remap 文件
+    remap_file = settings.get('remap_file', '').strip()
+    if remap_file and not Path(remap_file).expanduser().exists():
+        warnings.append(f"Remap 文件不存在: {remap_file}（将按 1:1 继续，可确认路径是否正确）。")
+
+    # dbcat / JAVA_HOME 仅在生成 fixup 时提示
+    generate_fixup_enabled = settings.get('generate_fixup', 'true').strip().lower() in ('true', '1', 'yes')
+    if generate_fixup_enabled:
+        dbcat_bin = settings.get('dbcat_bin', '').strip()
+        if not dbcat_bin:
+            warnings.append("generate_fixup 已开启，但未配置 dbcat_bin；如需生成修补脚本，请在 [SETTINGS] 中填写 dbcat 目录或 bin/dbcat 路径。")
+        else:
+            dbcat_path = Path(dbcat_bin).expanduser()
+            if not dbcat_path.exists():
+                errors.append(f"dbcat 路径不存在: {dbcat_path}。请确认路径或关闭 generate_fixup。")
+            else:
+                candidate = dbcat_path / "bin" / "dbcat" if dbcat_path.is_dir() else dbcat_path
+                if not candidate.exists():
+                    warnings.append(f"未在 {dbcat_path} 下找到 dbcat 可执行文件（期望 bin/dbcat 或可执行文件）；生成脚本可能失败。")
+
+        java_home = settings.get('java_home', '').strip() or os.environ.get('JAVA_HOME', '')
+        if not java_home:
+            warnings.append("generate_fixup 已开启，但 JAVA_HOME 未配置；dbcat 运行可能失败。")
+        elif not Path(java_home).expanduser().exists():
+            warnings.append(f"JAVA_HOME 指向的目录不存在: {java_home}，请确认 JDK 路径。")
+
+    # 提示输出目录
+    for key in ('fixup_dir', 'report_dir', 'dbcat_output_dir'):
+        val = settings.get(key, '').strip()
+        if not val:
+            continue
+        p = Path(val).expanduser()
+        if not p.exists():
+            warnings.append(f"目录 {p} 不存在，将在运行时尝试创建。请确保有写权限。")
+
+    if warnings:
+        for msg in warnings:
+            log.warning(msg)
+    if errors:
+        for msg in errors:
+            log.error(msg)
+        log.error("关键路径缺失或不可用，已终止。请按提示修复后重试。")
+        sys.exit(1)
+
+
+def run_config_wizard(config_path: Path) -> None:
+    """
+    交互式向导：在缺失或无效配置时提示用户输入并回写 config.ini。
+    若标准输入不可用则直接退出，以免阻塞自动化流水线。
+    """
+    if not sys.stdin.isatty():
+        log.error("交互式向导需要可用的标准输入/终端。请在可交互环境运行或直接编辑 config.ini。")
+        sys.exit(1)
+
+    cfg = configparser.ConfigParser()
+    if config_path.exists():
+        cfg.read(config_path, encoding="utf-8")
+        log.info("已加载现有配置，将检查缺失/无效项后写回: %s", config_path)
+    else:
+        log.warning("未找到配置文件，将创建: %s", config_path)
+
+    for section in ("ORACLE_SOURCE", "OCEANBASE_TARGET", "SETTINGS"):
+        if not cfg.has_section(section):
+            cfg[section] = {}
+
+    def _prompt_field(
+        section: str,
+        key: str,
+        message: str,
+        *,
+        default: Optional[str] = None,
+        required: bool = False,
+        validator: Optional[Callable[[str], Tuple[bool, str]]] = None,
+        transform: Optional[Callable[[str], str]] = None,
+    ) -> str:
+        current = cfg.get(section, key, fallback="").strip()
+        display_default = current or (default or "")
+        while True:
+            user_input = input(f"{message} [{display_default}]: ").strip()
+            value = user_input or display_default
+            if required and not value:
+                print("该项必填，请输入。")
+                continue
+            if validator:
+                ok, reason = validator(value)
+                if not ok:
+                    print(f"无效输入: {reason}")
+                    continue
+            if transform:
+                value = transform(value)
+            cfg[section][key] = value
+            return value
+
+    def _validate_path_exists(p: str) -> Tuple[bool, str]:
+        path = Path(p).expanduser()
+        return (path.exists(), "路径不存在") if p else (False, "为空")
+
+    def _validate_exec_path(p: str) -> Tuple[bool, str]:
+        path = Path(p).expanduser()
+        if not path.exists():
+            return False, "路径不存在"
+        if not os.access(path, os.X_OK):
+            return False, "文件不可执行"
+        return True, ""
+
+    def _validate_positive_int(val: str) -> Tuple[bool, str]:
+        try:
+            return int(val) > 0, "需要正整数"
+        except ValueError:
+            return False, "需要正整数"
+
+    def _bool_transform(val: str) -> str:
+        v = val.strip().lower()
+        if v in ("true", "1", "yes", "y", "on"):
+            return "true"
+        if v in ("false", "0", "no", "n", "off"):
+            return "false"
+        return val or "true"
+
+    print("\n=== 交互式配置向导 (空回车使用括号内默认值) ===")
+
+    # ORACLE_SOURCE
+    _prompt_field("ORACLE_SOURCE", "user", "Oracle 用户 (ORACLE_SOURCE.user)", required=True)
+    _prompt_field("ORACLE_SOURCE", "password", "Oracle 密码 (ORACLE_SOURCE.password)", required=True)
+    _prompt_field("ORACLE_SOURCE", "dsn", "Oracle DSN (host:port/service_name)", required=True)
+
+    # OCEANBASE_TARGET
+    _prompt_field(
+        "OCEANBASE_TARGET",
+        "executable",
+        "obclient 可执行文件路径",
+        validator=_validate_exec_path,
+        required=True,
+    )
+    _prompt_field("OCEANBASE_TARGET", "host", "OceanBase 主机名/IP", required=True)
+    _prompt_field(
+        "OCEANBASE_TARGET",
+        "port",
+        "OceanBase 端口",
+        default="2883",
+        validator=_validate_positive_int,
+        required=True,
+    )
+    _prompt_field("OCEANBASE_TARGET", "user_string", "-u 参数（含租户/库）", required=True)
+    _prompt_field("OCEANBASE_TARGET", "password", "OceanBase 密码", required=True)
+
+    # SETTINGS (关键路径与开关)
+    _prompt_field(
+        "SETTINGS",
+        "oracle_client_lib_dir",
+        "Oracle Instant Client 目录 (libclntsh.so 所在)",
+        validator=_validate_path_exists,
+        required=True,
+    )
+    _prompt_field(
+        "SETTINGS",
+        "source_schemas",
+        "源 schema 列表 (逗号分隔)",
+        required=True,
+    )
+    _prompt_field(
+        "SETTINGS",
+        "remap_file",
+        "Remap 文件路径 (可选，默认 remap_rules.txt)",
+        default="remap_rules.txt",
+    )
+    _prompt_field(
+        "SETTINGS",
+        "generate_fixup",
+        "是否生成修补脚本 (true/false)",
+        default=cfg.get("SETTINGS", "generate_fixup", fallback="true"),
+        transform=_bool_transform,
+    )
+    _prompt_field(
+        "SETTINGS",
+        "check_dependencies",
+        "是否校验依赖并生成 GRANT (true/false)",
+        default=cfg.get("SETTINGS", "check_dependencies", fallback="true"),
+        transform=_bool_transform,
+    )
+    _prompt_field(
+        "SETTINGS",
+        "check_primary_types",
+        "主对象过滤 (留空为全量，例如 TABLE,VIEW)",
+        default=cfg.get("SETTINGS", "check_primary_types", fallback=""),
+    )
+    _prompt_field(
+        "SETTINGS",
+        "check_extra_types",
+        "扩展对象过滤 (留空或 index,constraint,sequence,trigger)",
+        default=cfg.get("SETTINGS", "check_extra_types", fallback="index,constraint,sequence,trigger"),
+    )
+    _prompt_field(
+        "SETTINGS",
+        "fixup_dir",
+        "修补脚本输出目录",
+        default=cfg.get("SETTINGS", "fixup_dir", fallback="fixup_scripts"),
+    )
+    _prompt_field(
+        "SETTINGS",
+        "report_dir",
+        "报告输出目录",
+        default=cfg.get("SETTINGS", "report_dir", fallback="main_reports"),
+    )
+    _prompt_field(
+        "SETTINGS",
+        "dbcat_output_dir",
+        "dbcat 输出缓存目录",
+        default=cfg.get("SETTINGS", "dbcat_output_dir", fallback="dbcat_output"),
+    )
+    _prompt_field(
+        "SETTINGS",
+        "obclient_timeout",
+        "obclient 超时（秒）",
+        default=cfg.get("SETTINGS", "obclient_timeout", fallback="60"),
+        validator=_validate_positive_int,
+    )
+    _prompt_field(
+        "SETTINGS",
+        "cli_timeout",
+        "dbcat CLI 超时（秒）",
+        default=cfg.get("SETTINGS", "cli_timeout", fallback="600"),
+        validator=_validate_positive_int,
+    )
+
+    # 只有生成 fixup 时才校验 dbcat/JAVA_HOME
+    gen_fixup_val = cfg.get("SETTINGS", "generate_fixup", fallback="true").lower()
+    gen_fixup_enabled = gen_fixup_val in ("true", "1", "yes", "y", "on")
+    if gen_fixup_enabled:
+        _prompt_field(
+            "SETTINGS",
+            "dbcat_bin",
+            "dbcat 路径（目录或 bin/dbcat 可执行文件）",
+            validator=_validate_path_exists,
+            required=True,
+        )
+        _prompt_field(
+            "SETTINGS",
+            "java_home",
+            "JAVA_HOME (dbcat 需要)",
+            default=cfg.get("SETTINGS", "java_home", fallback=os.environ.get("JAVA_HOME", "")),
+            validator=_validate_path_exists,
+            required=True,
+        )
+        _prompt_field(
+            "SETTINGS",
+            "dbcat_from",
+            "dbcat from profile",
+            default=cfg.get("SETTINGS", "dbcat_from", fallback="oracle19c"),
+            required=True,
+        )
+        _prompt_field(
+            "SETTINGS",
+            "dbcat_to",
+            "dbcat to profile",
+            default=cfg.get("SETTINGS", "dbcat_to", fallback="oboracle422"),
+            required=True,
+        )
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(config_path, "w", encoding="utf-8") as fp:
+        cfg.write(fp)
+    log.info("配置已保存: %s", config_path)
 
 
 def load_remap_rules(file_path: str) -> RemapRules:
@@ -4341,6 +4621,11 @@ def parse_cli_args() -> argparse.Namespace:
         default="config.ini",
         help="config.ini path (default: ./config.ini)",
     )
+    parser.add_argument(
+        "--wizard",
+        action="store_true",
+        help="启动交互式配置向导：缺失/无效项时提示输入并写回配置，然后继续运行主流程。",
+    )
     return parser.parse_args()
 
 
@@ -4348,9 +4633,14 @@ def main():
     """主执行函数"""
     args = parse_cli_args()
     config_file = args.config
+    config_path = Path(config_file).resolve()
+
+    if args.wizard:
+        run_config_wizard(config_path)
 
     # 1) 加载配置
-    ora_cfg, ob_cfg, settings = load_config(config_file)
+    ora_cfg, ob_cfg, settings = load_config(str(config_path))
+    validate_runtime_paths(settings, ob_cfg)
 
     enabled_primary_types: Set[str] = set(settings.get('enabled_primary_types') or set(PRIMARY_OBJECT_TYPES))
     enabled_extra_types: Set[str] = set(settings.get('enabled_extra_types') or set(EXTRA_OBJECT_CHECK_TYPES))

@@ -1,7 +1,7 @@
 # 数据库对象对比工具设计文档
 
 本文档描述最新版 OceanBase Comparator Toolkit 的设计思路。新版本在原有“Oracle vs OceanBase” 元数据对比基础上，加入了依赖分析、授权推导、dbcat DDL 提取、Rich 报告与全量 fix-up 管道。
-> 当前版本：V0.6（Dump-Once, Compare-Locally + 依赖分析 + ALTER 级修补）
+> 当前版本：V0.6（Dump-Once, Compare-Locally + 依赖分析 + ALTER 级修补；支持交互式配置向导与运行前自检）
 
 ## 1. 核心目标
 

@@ -113,7 +113,8 @@ source setup_env.sh           # 设置 JAVA_HOME / LD_LIBRARY_PATH / PATH
 source .venv/bin/activate     # 进入对应 Python 版本的 venv
 
 # 运行对比
-python schema_diff_reconciler.py [config.ini]   # 不传时默认读取当前目录的 config.ini
+python schema_diff_reconciler.py [config.ini]            # 不传时默认读取当前目录的 config.ini
+python schema_diff_reconciler.py --wizard [config.ini]   # 缺项时启动交互式向导并写回配置
 
 # 查看输出
 ls main_reports

@@ -9,6 +9,7 @@
 2. `python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`  
 3. 配置 `config.ini`（路径用绝对路径，`generate_fixup` 默认开启会生成修补脚本）。  
 4. `python schema_diff_reconciler.py [config.ini]`（不传则默认读取当前目录的 `config.ini`）→ 输出 `main_reports/` 和 `fixup_scripts/`。  
+   - 配置繁琐时可加 `--wizard` 启动交互式向导，缺失/无效配置会逐项提示并写回 `config.ini` 后继续运行。  
 5. 审核后执行 `python run_fixup.py` 自动跑脚本，可多次重试。
 
 ## Highlights
@@ -118,8 +119,10 @@ pip install -r requirements.txt
 ```bash
 export LD_LIBRARY_PATH="/path/to/instantclient:${LD_LIBRARY_PATH}"
 python3 schema_diff_reconciler.py [path/to/config.ini]
+# 需要交互补全配置时：
+python3 schema_diff_reconciler.py --wizard [path/to/config.ini]
 ```
-`config.ini` 路径可省略（默认读取工作目录下的同名文件），便于在多套环境之间切换。
+`config.ini` 路径可省略（默认读取工作目录下的同名文件），便于在多套环境之间切换。`--wizard` 会在缺项/疑似无效时提示输入并保存。
 
 运行过程概览：
 
