@@ -1,7 +1,7 @@
 # 数据库对象对比工具设计文档
 
 本文档描述最新版 OceanBase Comparator Toolkit 的设计思路。新版本在原有“Oracle vs OceanBase” 元数据对比基础上，加入了依赖分析、授权推导、dbcat DDL 提取、Rich 报告与全量 fix-up 管道。
-> 当前版本：V0.7（Dump-Once, Compare-Locally + 依赖分析 + ALTER 级修补；支持交互式配置向导与运行前自检）
+> 当前版本：V0.8（Dump-Once, Compare-Locally + 依赖分析 + ALTER 级修补 + 注释校验；支持交互式配置向导与运行前自检）
 
 ## 1. 核心目标
 
@@ -58,6 +58,7 @@ Oracle Thick Mode (DBA_OBJECTS / DBA_DEPENDENCIES / DBMS_METADATA)
   - `DBA_OBJECTS`：源对象全集；
   - `DBA_TAB_COLUMNS`、`DBA_INDEXES/DBA_IND_COLUMNS`、`DBA_CONSTRAINTS/DBA_CONS_COLUMNS`、`DBA_TRIGGERS`、`DBA_SEQUENCES`；
   - `DBA_DEPENDENCIES`；
+  - `DBA_TAB_COMMENTS` / `DBA_COL_COMMENTS`（按待校验表分批获取注释，默认开启，可通过 `check_comments` 关闭）。
   - DDL 提取阶段调用 dbcat（内部仍读取 Oracle 数据字典）以便批量生成标准化 DDL。
 - 把读取结果缓存到 `OracleMetadata`（按 schema+对象名称索引）。
 

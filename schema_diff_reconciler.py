@@ -15,7 +15,7 @@
 # limitations under the License.
 
 """
-数据库对象对比工具 (V0.7 - Dump-Once, Compare-Locally + 依赖 + ALTER 修补)
+数据库对象对比工具 (V0.8 - Dump-Once, Compare-Locally + 依赖 + ALTER 修补 + 注释校验)
 ---------------------------------------------------------------------------
 功能概要：
 1. 对比 Oracle (源) 与 OceanBase (目标) 的：
@@ -27,11 +27,12 @@
 
 2. 对比规则：
    - TABLE：校验列名集合（忽略 OMS_* 列），并检查 VARCHAR/VARCHAR2 长度是否落在 [ceil(src*1.5), ceil(src*2.5)] 区间。
+   - TABLE/列注释：基于 DBA_TAB_COMMENTS / DBA_COL_COMMENTS 对比 Remap 后的表/列注释（可通过 check_comments 开关关闭）。
    - VIEW/MVIEW/PLSQL/SYNONYM/JOB/SCHEDULE/TYPE：对比是否存在。
    - INDEX / CONSTRAINT：校验存在性与列组合（含唯一性/约束类型）。
    - SEQUENCE / TRIGGER：校验存在性；依赖：映射后生成期望依赖并对比目标端。
 
-3. 性能架构 (V0.7 核心)：
+3. 性能架构 (V0.8 核心)：
    - OceanBase 侧采用“一次转储，本地对比”：
        使用少量 obclient 调用，分别 dump：
          DBA_OBJECTS
@@ -131,6 +132,9 @@ class ObMetadata(NamedTuple):
     constraints: Dict[Tuple[str, str], Dict[str, Dict]]  # (OWNER, TABLE_NAME) -> {CONS_NAME: {type, columns[list]}}
     triggers: Dict[Tuple[str, str], Dict[str, Dict]]     # (OWNER, TABLE_NAME) -> {TRG_NAME: {event, status}}
     sequences: Dict[str, Set[str]]                       # SEQUENCE_OWNER -> {SEQUENCE_NAME}
+    table_comments: Dict[Tuple[str, str], Optional[str]] # (OWNER, TABLE_NAME) -> COMMENT
+    column_comments: Dict[Tuple[str, str], Dict[str, Optional[str]]]  # (OWNER, TABLE_NAME) -> {COLUMN_NAME: COMMENT}
+    comments_complete: bool                              # 元数据是否完整加载（两端失败则跳过注释校验）
 
 
 class OracleMetadata(NamedTuple):
@@ -142,6 +146,9 @@ class OracleMetadata(NamedTuple):
     constraints: Dict[Tuple[str, str], Dict[str, Dict]]    # (OWNER, TABLE_NAME) -> 约束
     triggers: Dict[Tuple[str, str], Dict[str, Dict]]       # (OWNER, TABLE_NAME) -> 触发器
     sequences: Dict[str, Set[str]]                         # OWNER -> {SEQUENCE_NAME}
+    table_comments: Dict[Tuple[str, str], Optional[str]]   # (OWNER, TABLE_NAME) -> COMMENT
+    column_comments: Dict[Tuple[str, str], Dict[str, Optional[str]]]  # (OWNER, TABLE_NAME) -> {COLUMN_NAME: COMMENT}
+    comments_complete: bool                                # 注释元数据是否加载完成
 
 
 class DependencyRecord(NamedTuple):
@@ -210,6 +217,9 @@ EXTRA_OBJECT_CHECK_TYPES: Tuple[str, ...] = (
     'SEQUENCE',
     'TRIGGER'
 )
+
+# 注释比对时批量 IN 子句的大小，避免 ORA-01795
+COMMENT_BATCH_SIZE = 200
 
 # OceanBase 目标端自动生成且需在列对比中忽略的 OMS 列
 IGNORED_OMS_COLUMNS: Tuple[str, ...] = (
@@ -287,6 +297,11 @@ def parse_type_list(
     return parsed & allowed
 
 
+def chunk_list(items: List[str], size: int) -> List[List[str]]:
+    """Split list into batches of given size."""
+    return [items[i:i + size] for i in range(0, len(items), size)]
+
+
 # --- 扩展检查结果结构 ---
 class IndexMismatch(NamedTuple):
     table: str
@@ -317,6 +332,14 @@ class TriggerMismatch(NamedTuple):
     detail_mismatch: List[str]
 
 
+class CommentMismatch(NamedTuple):
+    table: str
+    table_comment: Optional[Tuple[str, str]]  # (src, tgt) when different
+    column_comment_diffs: List[Tuple[str, str, str]]  # (column, src_comment, tgt_comment)
+    missing_columns: Set[str]
+    extra_columns: Set[str]
+
+
 ExtraCheckResults = Dict[str, List]
 
 
@@ -334,6 +357,26 @@ def normalize_column_sequence(columns: Optional[List[str]]) -> Tuple[str, ...]:
         seen.add(col_u)
         normalized.append(col_u)
     return tuple(normalized)
+
+
+def normalize_comment_text(text: Optional[str]) -> str:
+    """
+    统一注释文本：去除首尾空白、折叠多余空白，降低换行/制表差异的噪声。
+    """
+    if text is None:
+        return ""
+    collapsed = " ".join(str(text).replace("\r\n", "\n").replace("\r", "\n").split())
+    return collapsed.strip()
+
+
+def shorten_comment_preview(text: str, limit: int = 120) -> str:
+    """
+    将注释压缩为单行便于展示，控制长度。
+    """
+    if not text:
+        return "<空>"
+    single_line = text.replace("\n", "\\n")
+    return single_line if len(single_line) <= limit else single_line[:limit - 3] + "..."
 
 GRANT_PRIVILEGE_BY_TYPE: Dict[str, str] = {
     'TABLE': 'SELECT',
@@ -430,6 +473,7 @@ def load_config(config_file: str) -> Tuple[OraConfig, ObConfig, Dict]:
         settings.setdefault('check_primary_types', '')
         settings.setdefault('check_extra_types', '')
         settings.setdefault('check_dependencies', 'true')
+        settings.setdefault('check_comments', 'true')
 
         enabled_primary_types = parse_type_list(
             settings.get('check_primary_types', ''),
@@ -445,6 +489,10 @@ def load_config(config_file: str) -> Tuple[OraConfig, ObConfig, Dict]:
         settings['enabled_extra_types'] = enabled_extra_types
         settings['enable_dependencies_check'] = parse_bool_flag(
             settings.get('check_dependencies', 'true'),
+            True
+        )
+        settings['enable_comment_check'] = parse_bool_flag(
+            settings.get('check_comments', 'true'),
             True
         )
 
@@ -1050,6 +1098,23 @@ def find_source_by_target(
     return None
 
 
+def collect_table_pairs(master_list: MasterCheckList, use_target: bool = False) -> Set[Tuple[str, str]]:
+    """
+    提取 master_list 中的 (schema, table) 集合。
+    use_target=True 时基于目标端表名，否则使用源端。
+    """
+    pairs: Set[Tuple[str, str]] = set()
+    for src_name, tgt_name, obj_type in master_list:
+        if obj_type.upper() != 'TABLE':
+            continue
+        name = tgt_name if use_target else src_name
+        if '.' not in name:
+            continue
+        schema, table = name.split('.', 1)
+        pairs.add((schema.upper(), table.upper()))
+    return pairs
+
+
 def build_schema_mapping(master_list: MasterCheckList) -> Dict[str, str]:
     """
     基于 master_list 中 TABLE 映射，推导 schema 映射：
@@ -1243,7 +1308,9 @@ def dump_ob_metadata(
     include_indexes: bool = True,
     include_constraints: bool = True,
     include_triggers: bool = True,
-    include_sequences: bool = True
+    include_sequences: bool = True,
+    include_comments: bool = True,
+    target_table_pairs: Optional[Set[Tuple[str, str]]] = None
 ) -> ObMetadata:
     """
     一次性从 OceanBase dump 所有需要的元数据，返回 ObMetadata。
@@ -1257,7 +1324,10 @@ def dump_ob_metadata(
             indexes={},
             constraints={},
             triggers={},
-            sequences={}
+            sequences={},
+            table_comments={},
+            column_comments={},
+            comments_complete=False
         )
 
     owners_in = ",".join(f"'{s}'" for s in sorted(target_schemas))
@@ -1346,6 +1416,69 @@ def dump_ob_metadata(
                     "data_default": default,
                     "hidden": False
                 }
+
+    # --- 2.b 注释 (DBA_TAB_COMMENTS / DBA_COL_COMMENTS) ---
+    table_comments: Dict[Tuple[str, str], Optional[str]] = {}
+    column_comments: Dict[Tuple[str, str], Dict[str, Optional[str]]] = {}
+    comments_complete = False
+    if include_comments:
+        target_pairs = target_table_pairs or set()
+        if not target_pairs:
+            comments_complete = True
+        else:
+            comment_keys = sorted(f"{owner}.{table}" for owner, table in target_pairs)
+            comments_complete = True
+
+            for chunk in chunk_list(comment_keys, COMMENT_BATCH_SIZE):
+                key_clause = ",".join(f"'{val}'" for val in chunk)
+                sql_tab_cmt = f"""
+                    SELECT OWNER, TABLE_NAME,
+                           REPLACE(REPLACE(REPLACE(COMMENTS, CHR(10), ' '), CHR(13), ' '), CHR(9), ' ') AS COMMENTS
+                    FROM DBA_TAB_COMMENTS
+                    WHERE OWNER||'.'||TABLE_NAME IN ({key_clause})
+                """
+                ok, out, err = obclient_run_sql(ob_cfg, sql_tab_cmt)
+                if not ok:
+                    log.warning("无法从 OB 读取 DBA_TAB_COMMENTS，注释比对将跳过：%s", err)
+                    comments_complete = False
+                    break
+                if out:
+                    for line in out.splitlines():
+                        parts = line.split('\t')
+                        if len(parts) < 3:
+                            continue
+                        owner = parts[0].strip().upper()
+                        table = parts[1].strip().upper()
+                        comment = parts[2].strip() if len(parts) >= 3 else None
+                        table_comments[(owner, table)] = comment
+
+            if comments_complete:
+                for chunk in chunk_list(comment_keys, COMMENT_BATCH_SIZE):
+                    key_clause = ",".join(f"'{val}'" for val in chunk)
+                    sql_col_cmt = f"""
+                        SELECT OWNER, TABLE_NAME, COLUMN_NAME,
+                               REPLACE(REPLACE(REPLACE(COMMENTS, CHR(10), ' '), CHR(13), ' '), CHR(9), ' ') AS COMMENTS
+                        FROM DBA_COL_COMMENTS
+                        WHERE OWNER||'.'||TABLE_NAME IN ({key_clause})
+                    """
+                    ok, out, err = obclient_run_sql(ob_cfg, sql_col_cmt)
+                    if not ok:
+                        log.warning("无法从 OB 读取 DBA_COL_COMMENTS，注释比对将跳过：%s", err)
+                        comments_complete = False
+                        break
+                    if out:
+                        for line in out.splitlines():
+                            parts = line.split('\t')
+                            if len(parts) < 4:
+                                continue
+                            owner = parts[0].strip().upper()
+                            table = parts[1].strip().upper()
+                            column = parts[2].strip().upper()
+                            comment = parts[3].strip() if len(parts) >= 4 else None
+                            column_comments.setdefault((owner, table), {})[column] = comment
+            if comments_complete and target_pairs and not table_comments and not column_comments:
+                log.warning("OB 端注释查询未返回任何记录，可能缺少权限，注释比对将跳过。")
+                comments_complete = False
 
     # --- 3. DBA_INDEXES ---
     indexes: Dict[Tuple[str, str], Dict[str, Dict]] = {}
@@ -1534,14 +1667,17 @@ def dump_ob_metadata(
                 owner, seq_name = parts[0].strip().upper(), parts[1].strip().upper()
                 sequences.setdefault(owner, set()).add(seq_name)
 
-    log.info("OceanBase 元数据转储完成 (根据开关加载 DBA_OBJECTS/列/索引/约束/触发器/序列)。")
+    log.info("OceanBase 元数据转储完成 (根据开关加载 DBA_OBJECTS/列/索引/约束/触发器/序列/注释)。")
     return ObMetadata(
         objects_by_type=objects_by_type,
         tab_columns=tab_columns,
         indexes=indexes,
         constraints=constraints,
         triggers=triggers,
-        sequences=sequences
+        sequences=sequences,
+        table_comments=table_comments,
+        column_comments=column_comments,
+        comments_complete=comments_complete
     )
 
 
@@ -1554,24 +1690,14 @@ def dump_oracle_metadata(
     include_indexes: bool = True,
     include_constraints: bool = True,
     include_triggers: bool = True,
-    include_sequences: bool = True
+    include_sequences: bool = True,
+    include_comments: bool = True
 ) -> OracleMetadata:
     """
     预先加载 Oracle 端所需的所有元数据，避免在校验/修补阶段频繁查询。
     """
-    table_pairs: Set[Tuple[str, str]] = set()
-    owner_set: Set[str] = set()
-    for src_name, _, obj_type in master_list:
-        if obj_type.upper() != 'TABLE':
-            continue
-        try:
-            schema, table = src_name.split('.')
-        except ValueError:
-            continue
-        schema = schema.upper()
-        table = table.upper()
-        owner_set.add(schema)
-        table_pairs.add((schema, table))
+    table_pairs: Set[Tuple[str, str]] = collect_table_pairs(master_list)
+    owner_set: Set[str] = {schema for schema, _ in table_pairs}
 
     owners = sorted(owner_set)
     seq_owners = sorted({s.upper() for s in settings.get('source_schemas_list', [])})
@@ -1583,7 +1709,10 @@ def dump_oracle_metadata(
             indexes={},
             constraints={},
             triggers={},
-            sequences={}
+            sequences={},
+            table_comments={},
+            column_comments={},
+            comments_complete=False
         )
 
     def _make_in_clause(values: List[str]) -> str:
@@ -1595,6 +1724,9 @@ def dump_oracle_metadata(
     constraints: Dict[Tuple[str, str], Dict[str, Dict]] = {}
     triggers: Dict[Tuple[str, str], Dict[str, Dict]] = {}
     sequences: Dict[str, Set[str]] = {}
+    table_comments: Dict[Tuple[str, str], Optional[str]] = {}
+    column_comments: Dict[Tuple[str, str], Dict[str, Optional[str]]] = {}
+    comments_complete = False
 
     def _safe_upper(value: Optional[str]) -> Optional[str]:
         if value is None:
@@ -1836,6 +1968,55 @@ def dump_oracle_metadata(
                                 "status": row[4]
                             }
 
+                if include_comments:
+                    if not table_pairs:
+                        comments_complete = True
+                    else:
+                        comment_keys = sorted(f"{owner}.{table}" for owner, table in table_pairs)
+                        comments_complete = True
+                        try:
+                            with ora_conn.cursor() as cursor:
+                                for chunk in chunk_list(comment_keys, COMMENT_BATCH_SIZE):
+                                    if not chunk:
+                                        continue
+                                    placeholders = _make_in_clause(chunk)
+                                    sql_cmt = f"""
+                                        SELECT OWNER, TABLE_NAME, COMMENTS
+                                        FROM DBA_TAB_COMMENTS
+                                        WHERE OWNER||'.'||TABLE_NAME IN ({placeholders})
+                                    """
+                                    cursor.execute(sql_cmt, chunk)
+                                    for row in cursor:
+                                        owner = _safe_upper(row[0])
+                                        table = _safe_upper(row[1])
+                                        if not owner or not table:
+                                            continue
+                                        table_comments[(owner, table)] = row[2]
+
+                                for chunk in chunk_list(comment_keys, COMMENT_BATCH_SIZE):
+                                    if not chunk:
+                                        continue
+                                    placeholders = _make_in_clause(chunk)
+                                    sql_cmt_col = f"""
+                                        SELECT OWNER, TABLE_NAME, COLUMN_NAME, COMMENTS
+                                        FROM DBA_COL_COMMENTS
+                                        WHERE OWNER||'.'||TABLE_NAME IN ({placeholders})
+                                    """
+                                    cursor.execute(sql_cmt_col, chunk)
+                                for row in cursor:
+                                    owner = _safe_upper(row[0])
+                                    table = _safe_upper(row[1])
+                                    column = _safe_upper(row[2])
+                                    if not owner or not table or not column:
+                                        continue
+                                    column_comments.setdefault((owner, table), {})[column] = row[3]
+                        except oracledb.Error as e:
+                            comments_complete = False
+                            log.warning("读取 DBA_TAB_COMMENTS/DBA_COL_COMMENTS 失败，将跳过注释比对：%s", e)
+                        if comments_complete and table_pairs and not table_comments and not column_comments:
+                            log.warning("Oracle 端注释查询未返回任何记录，可能缺少权限，注释比对将跳过。")
+                            comments_complete = False
+
             if seq_owners and include_sequences:
                 seq_clause = _make_in_clause(seq_owners)
                 sql_seq = f"""
@@ -1857,8 +2038,8 @@ def dump_oracle_metadata(
         sys.exit(1)
 
     log.info(
-        "Oracle 元数据加载完成：列=%d, 索引表=%d, 约束表=%d, 触发器表=%d, 序列schema=%d",
-        len(table_columns), len(indexes), len(constraints), len(triggers), len(sequences)
+        "Oracle 元数据加载完成：列=%d, 索引表=%d, 约束表=%d, 触发器表=%d, 序列schema=%d, 注释表=%d",
+        len(table_columns), len(indexes), len(constraints), len(triggers), len(sequences), len(table_comments)
     )
 
     return OracleMetadata(
@@ -1866,7 +2047,10 @@ def dump_oracle_metadata(
         indexes=indexes,
         constraints=constraints,
         triggers=triggers,
-        sequences=sequences
+        sequences=sequences,
+        table_comments=table_comments,
+        column_comments=column_comments,
+        comments_complete=comments_complete
     )
 
 
@@ -2756,6 +2940,91 @@ def check_extra_objects(
                 ))
 
     return extra_results
+
+
+# ====================== 注释一致性检查 ======================
+
+def check_comments(
+    master_list: MasterCheckList,
+    oracle_meta: OracleMetadata,
+    ob_meta: ObMetadata,
+    enable_comment_check: bool = True
+) -> Dict[str, object]:
+    results: Dict[str, object] = {
+        "ok": [],
+        "mismatched": [],
+        "skipped_reason": None
+    }
+
+    if not enable_comment_check:
+        results["skipped_reason"] = "根据配置关闭注释比对。"
+        return results
+
+    if not master_list:
+        results["skipped_reason"] = "无表对象可供注释比对。"
+        return results
+
+    if not any(obj_type.upper() == 'TABLE' for _, _, obj_type in master_list):
+        results["skipped_reason"] = "当前清单未包含 TABLE，对应注释比对已跳过。"
+        return results
+
+    if not oracle_meta.comments_complete:
+        results["skipped_reason"] = "未成功加载 Oracle 注释元数据，已跳过注释比对。"
+        return results
+
+    if not ob_meta.comments_complete:
+        results["skipped_reason"] = "未成功加载 OceanBase 注释元数据，已跳过注释比对。"
+        return results
+
+    for src_name, tgt_name, obj_type in master_list:
+        if obj_type.upper() != 'TABLE':
+            continue
+        try:
+            src_schema, src_table = src_name.split('.')
+            tgt_schema, tgt_table = tgt_name.split('.')
+        except ValueError:
+            continue
+
+        src_key = (src_schema.upper(), src_table.upper())
+        tgt_key = (tgt_schema.upper(), tgt_table.upper())
+
+        src_table_cmt = normalize_comment_text(oracle_meta.table_comments.get(src_key))
+        tgt_table_cmt = normalize_comment_text(ob_meta.table_comments.get(tgt_key))
+        table_diff = src_table_cmt != tgt_table_cmt
+
+        src_col_cmts = oracle_meta.column_comments.get(src_key, {})
+        tgt_col_cmts = ob_meta.column_comments.get(tgt_key, {})
+
+        missing_cols = {
+            col for col in src_col_cmts.keys()
+            if col not in tgt_col_cmts and not is_ignored_oms_column(col)
+        }
+        extra_cols = {
+            col for col in tgt_col_cmts.keys()
+            if col not in src_col_cmts and not is_ignored_oms_column(col)
+        }
+
+        column_diffs: List[Tuple[str, str, str]] = []
+        for col in (src_col_cmts.keys() & tgt_col_cmts.keys()):
+            if is_ignored_oms_column(col):
+                continue
+            src_cmt = normalize_comment_text(src_col_cmts.get(col))
+            tgt_cmt = normalize_comment_text(tgt_col_cmts.get(col))
+            if src_cmt != tgt_cmt:
+                column_diffs.append((col, src_cmt, tgt_cmt))
+
+        if table_diff or column_diffs or missing_cols or extra_cols:
+            results["mismatched"].append(CommentMismatch(
+                table=f"{tgt_key[0]}.{tgt_key[1]}",
+                table_comment=(src_table_cmt, tgt_table_cmt) if table_diff else None,
+                column_comment_diffs=column_diffs,
+                missing_columns=missing_cols,
+                extra_columns=extra_cols
+            ))
+        else:
+            results["ok"].append(f"{tgt_key[0]}.{tgt_key[1]}")
+
+    return results
 
 
 # ====================== DDL 抽取 & ALTER 级别修补 ======================
@@ -4168,6 +4437,7 @@ def print_final_report(
     tv_results: ReportResults,
     total_checked: int,
     extra_results: Optional[ExtraCheckResults] = None,
+    comment_results: Optional[Dict[str, object]] = None,
     dependency_report: Optional[DependencyReport] = None,
     required_grants: Optional[Dict[str, Set[Tuple[str, str]]]] = None,
     report_file: Optional[Path] = None,
@@ -4190,6 +4460,12 @@ def print_final_report(
             "index_ok": [], "index_mismatched": [], "constraint_ok": [],
             "constraint_mismatched": [], "sequence_ok": [], "sequence_mismatched": [],
             "trigger_ok": [], "trigger_mismatched": [],
+        }
+    if comment_results is None:
+        comment_results = {
+            "ok": [],
+            "mismatched": [],
+            "skipped_reason": "未执行注释比对。"
         }
     if dependency_report is None:
         dependency_report = {
@@ -4220,6 +4496,9 @@ def print_final_report(
     seq_mis_cnt = len(extra_results.get("sequence_mismatched", []))
     trg_ok_cnt = len(extra_results.get("trigger_ok", []))
     trg_mis_cnt = len(extra_results.get("trigger_mismatched", []))
+    comment_ok_cnt = len(comment_results.get("ok", []))
+    comment_mis_cnt = len(comment_results.get("mismatched", []))
+    comment_skip_reason = comment_results.get("skipped_reason")
     extra_target_cnt = len(tv_results.get('extra_targets', []))
     dep_missing_cnt = len(dependency_report.get("missing", []))
     dep_unexpected_cnt = len(dependency_report.get("unexpected", []))
@@ -4227,7 +4506,7 @@ def print_final_report(
     grant_stmt_cnt = sum(len(entries) for entries in required_grants.values())
     source_missing_schema_cnt = len(schema_summary.get("source_missing", []))
 
-    console.print(Panel.fit("[bold]数据库对象迁移校验报告 (V0.7 - Rich)[/bold]", style="title"))
+    console.print(Panel.fit("[bold]数据库对象迁移校验报告 (V0.8 - Rich)[/bold]", style="title"))
 
     section_width = 140
     count_table_kwargs: Dict[str, object] = {"width": section_width, "expand": False}
@@ -4311,6 +4590,16 @@ def print_final_report(
     primary_text.append("无效规则: ", style="mismatch")
     primary_text.append(f"{extraneous_count}")
     summary_table.add_row("[bold]主对象 (TABLE/VIEW/etc.)[/bold]", primary_text)
+
+    comment_text = Text()
+    if comment_skip_reason:
+        comment_text.append(str(comment_skip_reason), style="info")
+    else:
+        comment_text.append("一致: ", style="ok")
+        comment_text.append(f"{comment_ok_cnt}\n")
+        comment_text.append("差异: ", style="mismatch")
+        comment_text.append(f"{comment_mis_cnt}")
+    summary_table.add_row("[bold]注释一致性[/bold]", comment_text)
 
     ext_text = Text()
     ext_text.append("索引: ", style="info")
@@ -4490,6 +4779,34 @@ def print_final_report(
             table.add_row(tgt_name, details)
         console.print(table)
 
+    comment_mismatches = comment_results.get("mismatched", [])
+    if comment_skip_reason:
+        console.print(Panel.fit(str(comment_skip_reason), style="info", width=section_width))
+    if comment_mismatches:
+        table = Table(title=f"[header]3. 表/列注释一致性检查 (共 {len(comment_mismatches)} 张表差异)", width=section_width)
+        table.add_column("表名", style="info", width=OBJECT_COL_WIDTH)
+        table.add_column("差异详情", width=DETAIL_COL_WIDTH)
+        for item in comment_mismatches:
+            details = Text()
+            if item.table_comment:
+                src_cmt, tgt_cmt = item.table_comment
+                details.append(
+                    f"* 表注释不一致: src={shorten_comment_preview(src_cmt)}, "
+                    f"tgt={shorten_comment_preview(tgt_cmt)}\n",
+                    style="mismatch"
+                )
+            if item.missing_columns:
+                details.append(f"- 缺失列注释: {sorted(item.missing_columns)}\n", style="missing")
+            if item.extra_columns:
+                details.append(f"+ 额外列注释: {sorted(item.extra_columns)}\n", style="mismatch")
+            for col, src_cmt, tgt_cmt in item.column_comment_diffs:
+                details.append(
+                    f"  - {col}: src={shorten_comment_preview(src_cmt)}, "
+                    f"tgt={shorten_comment_preview(tgt_cmt)}\n"
+                )
+            table.add_row(item.table, details)
+        console.print(table)
+
     # --- 3. 扩展对象差异 ---
     def print_ext_mismatch_table(title, items, headers, render_func):
         if not items:
@@ -4632,10 +4949,11 @@ def parse_cli_args() -> argparse.Namespace:
     """解析命令行参数，允许自定义 config.ini 路径并展示功能说明。"""
     desc = textwrap.dedent(
         """\
-        OceanBase Comparator Toolkit v0.7
+        OceanBase Comparator Toolkit v0.8
         - 一次转储，本地对比：Oracle Thick Mode + 少量 obclient 调用，全部比对在内存完成。
         - 覆盖对象：TABLE/VIEW/MVIEW/PLSQL/TYPE/JOB/SCHEDULE + INDEX/CONSTRAINT/SEQUENCE/TRIGGER。
         - 校验规则：表列名集合 + VARCHAR/VARCHAR2 长度窗口 [ceil(1.5x), ceil(2.5x)]；其余对象校验存在性/列组合。
+        - 注释校验：基于 DBA_TAB_COMMENTS / DBA_COL_COMMENTS 的表/列注释一致性检查（可通过 check_comments 开关关闭）。
         - 依赖&授权：加载 DBA_DEPENDENCIES，映射后对比，缺失则生成 ALTER ... COMPILE；推导跨 schema GRANT。
         - Fix-up 输出：缺失对象 CREATE、表列 ALTER ADD/MODIFY、依赖 COMPILE、GRANT，按类型落地到 fixup_scripts/*。
         """
@@ -4695,6 +5013,7 @@ def main():
     enabled_primary_types: Set[str] = set(settings.get('enabled_primary_types') or set(PRIMARY_OBJECT_TYPES))
     enabled_extra_types: Set[str] = set(settings.get('enabled_extra_types') or set(EXTRA_OBJECT_CHECK_TYPES))
     enable_dependencies_check: bool = bool(settings.get('enable_dependencies_check', True))
+    enable_comment_check: bool = bool(settings.get('enable_comment_check', True))
 
     log.info(
         "本次启用的主对象类型: %s",
@@ -4706,6 +5025,8 @@ def main():
     )
     if not enable_dependencies_check:
         log.info("已根据配置跳过依赖关系校验与 GRANT 计算。")
+    if not enable_comment_check:
+        log.info("已根据配置关闭注释一致性校验。")
 
     # 初始化 Oracle Instant Client (Thick Mode)
     init_oracle_client_from_settings(settings)
@@ -4746,6 +5067,7 @@ def main():
                 target_schemas.add(schema.upper())
             except ValueError:
                 continue
+    target_table_pairs = collect_table_pairs(master_list, use_target=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     report_dir_setting = settings.get('report_dir', 'main_reports').strip() or 'main_reports'
@@ -4782,10 +5104,16 @@ def main():
             "trigger_ok": [],
             "trigger_mismatched": [],
         }
+        comment_results = {
+            "ok": [],
+            "mismatched": [],
+            "skipped_reason": "主校验清单为空，未执行注释比对。"
+        }
         print_final_report(
             tv_results,
             0,
             extra_results,
+            comment_results,
             dependency_report,
             required_grants,
             report_path,
@@ -4810,7 +5138,9 @@ def main():
         include_indexes='INDEX' in enabled_extra_types,
         include_constraints='CONSTRAINT' in enabled_extra_types,
         include_triggers='TRIGGER' in enabled_extra_types,
-        include_sequences='SEQUENCE' in enabled_extra_types
+        include_sequences='SEQUENCE' in enabled_extra_types,
+        include_comments=enable_comment_check,
+        target_table_pairs=target_table_pairs if enable_comment_check else set()
     )
     ob_dependencies: Set[Tuple[str, str, str, str]] = set()
     if enable_dependencies_check:
@@ -4831,7 +5161,8 @@ def main():
         include_indexes='INDEX' in enabled_extra_types,
         include_constraints='CONSTRAINT' in enabled_extra_types,
         include_triggers='TRIGGER' in enabled_extra_types,
-        include_sequences='SEQUENCE' in enabled_extra_types
+        include_sequences='SEQUENCE' in enabled_extra_types,
+        include_comments=enable_comment_check
     )
 
     monitored_types: Tuple[str, ...] = tuple(
@@ -4841,6 +5172,12 @@ def main():
 
     object_counts_summary = compute_object_counts(full_object_mapping, ob_meta, oracle_meta, monitored_types)
     tv_results = check_primary_objects(master_list, extraneous_rules, ob_meta, oracle_meta, enabled_primary_types)
+    comment_results = check_comments(
+        master_list,
+        oracle_meta,
+        ob_meta,
+        enable_comment_check
+    )
 
     # 8) 扩展对象校验 (索引/约束/序列/触发器)
     extra_results = check_extra_objects(
@@ -4892,6 +5229,7 @@ def main():
         tv_results,
         len(master_list),
         extra_results,
+        comment_results,
         dependency_report,
         required_grants,
         report_path,

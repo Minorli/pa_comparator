@@ -1,7 +1,7 @@
 # OceanBase Comparator Toolkit
 
 🚀 **极简必看用法**  
-> 当前版本：V0.7（Dump-Once, Compare-Locally + 依赖 / ALTER 修补）
+> 当前版本：V0.8（Dump-Once, Compare-Locally + 依赖 / ALTER 修补 + 注释校验）
 
 本程序只有一个 python 程序而没有拆分成无数个模块的原因是，方便程序迭代后，"只传一次到服务器上"，因为你知道向客户的环境传一个打包文件和传一个文本文件难度是不是一样的（文本你可以打开，邮件粘贴到终端里）。
 
@@ -17,6 +17,7 @@
 - 一次转储本地对比：Oracle 使用 Thick Mode + `DBMS_METADATA`，OceanBase 通过几次 `obclient` 调用批量拉取 `DBA_*` 视图，避免循环调库。
 - 覆盖的对象类型包括 `TABLE/VIEW/MATERIALIZED VIEW/PROCEDURE/FUNCTION/PACKAGE/PACKAGE BODY/SYNONYM/JOB/SCHEDULE/TYPE/TYPE BODY`，并扩展检查 `INDEX/CONSTRAINT/SEQUENCE/TRIGGER`。
 - 表校验除了存在性外，还会校验列名集合与 `VARCHAR/VARCHAR2` 长度（目标端需在 `[ceil(1.5*x), ceil(2.5*x)]` 区间），并生成 `ALTER TABLE` 修补建议。
+- 新增表/列注释一致性检查（DBA_TAB_COMMENTS / DBA_COL_COMMENTS），支持通过 `check_comments` 开关关闭，批量查询仅覆盖待校验的表，避免全库扫描。
 - 自动收集 `DBA_DEPENDENCIES` 并映射到目标 schema，输出缺失/多余依赖、依赖重编译脚本和所需 `GRANT`。
 - 启动时会提示需要 DBA/SELECT ANY DICTIONARY/SELECT_CATALOG_ROLE 等权限以查询 `DBA_*` 视图，否则元数据不完整。
 - 基于 dbcat 导出的 DDL + 本地修补器生成结构化的 `fixup_scripts/` 目录，含 SEQUENCE/TABLE/代码对象/INDEX/CONSTRAINT/TRIGGER/COMPILE/GRANT/TABLE_ALTER 等脚本。
@@ -79,6 +80,7 @@ pip install -r requirements.txt
   - `check_primary_types`：限制本次主对象校验的类型，逗号分隔（如 `TABLE,VIEW`，留空为全量）。
   - `check_extra_types`：限制扩展校验的模块，默认 `index,constraint,sequence,trigger`，可按需删减。
   - `check_dependencies`：`true/false`，关闭后跳过依赖校验与授权建议。
+  - `check_comments`：`true/false`，控制是否比对表/列注释。
   - `obclient_timeout`：每次 `obclient` 调用的超时（秒，默认 60）。
   - `cli_timeout`：shell 工具（如 dbcat）超时，默认 600 秒。
   - `dbcat_bin`：dbcat 根目录或 `bin/dbcat` 可执行文件路径。
@@ -133,6 +135,7 @@ python3 schema_diff_reconciler.py --wizard [path/to/config.ini]
 4. **OceanBase 元数据转储**：通过少量 `obclient` 调用一次性拉取 `DBA_OBJECTS/DBA_TAB_COLUMNS/DBA_INDEXES/DBA_CONSTRAINTS/DBA_CONS_COLUMNS/DBA_TRIGGERS/DBA_SEQUENCES/DBA_DEPENDENCIES`。
 5. **对比阶段**  
    - 主对象：逐个校验存在性与表列/长度差异（忽略 `OMS_*` 列）。  
+   - 注释：按 Remap 后的表/列名比对 `DBA_TAB_COMMENTS` / `DBA_COL_COMMENTS`，默认开启；查询仅限待校验的表，避免全表扫描。  
    - 扩展对象：对每个表比对索引/约束/触发器（目标端额外约束名含 `_OMS_ROWID` 会忽略；源端元数据缺失时仍会把目标端现存索引/约束列出来）；按 schema 比对序列（源端缺数据时也会提示目标端已有序列）。  
    - 依赖：把 Oracle 依赖映射到目标 schema，核对 OceanBase 的 `DBA_DEPENDENCIES`，得出缺失/额外/跳过项，并计算跨 schema 所需的 `GRANT`。
 6. **修补脚本（可选）**：若 `generate_fixup=true`，按以下顺序生成脚本：
@@ -153,6 +156,7 @@ python3 schema_diff_reconciler.py --wizard [path/to/config.ini]
   控制台同款报告（Rich 表格），包含：
   - 源/目标数据库的版本、容器/用户/连接概要
   - 主对象汇总（OK/缺失/不匹配/无效 remap）
+  - 表/列注释一致性
   - 扩展对象（索引/约束/序列/触发器）状态
   - 依赖缺失/额外/跳过原因以及所需 GRANT
   - Oracle vs OceanBase 数量对比和 fixup 指南
