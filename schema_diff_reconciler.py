@@ -323,6 +323,7 @@ class SequenceMismatch(NamedTuple):
     missing_sequences: Set[str]
     extra_sequences: Set[str]
     note: Optional[str] = None
+    missing_mappings: List[Tuple[str, str]] = []
 
 
 class TriggerMismatch(NamedTuple):
@@ -330,6 +331,7 @@ class TriggerMismatch(NamedTuple):
     missing_triggers: Set[str]
     extra_triggers: Set[str]
     detail_mismatch: List[str]
+    missing_mappings: List[Tuple[str, str]] = []
 
 
 class CommentMismatch(NamedTuple):
@@ -474,6 +476,8 @@ def load_config(config_file: str) -> Tuple[OraConfig, ObConfig, Dict]:
         settings.setdefault('check_extra_types', '')
         settings.setdefault('check_dependencies', 'true')
         settings.setdefault('check_comments', 'true')
+        settings.setdefault('infer_schema_mapping', 'true')
+        settings.setdefault('dbcat_chunk_size', '150')
 
         enabled_primary_types = parse_type_list(
             settings.get('check_primary_types', ''),
@@ -495,6 +499,14 @@ def load_config(config_file: str) -> Tuple[OraConfig, ObConfig, Dict]:
             settings.get('check_comments', 'true'),
             True
         )
+        settings['enable_schema_mapping_infer'] = parse_bool_flag(
+            settings.get('infer_schema_mapping', 'true'),
+            True
+        )
+        try:
+            settings['dbcat_chunk_size'] = int(settings.get('dbcat_chunk_size', '150'))
+        except ValueError:
+            settings['dbcat_chunk_size'] = 150
 
         global OBC_TIMEOUT
         try:
@@ -706,6 +718,27 @@ def run_config_wizard(config_path: Path) -> None:
         "是否校验依赖并生成 GRANT (true/false)",
         default=cfg.get("SETTINGS", "check_dependencies", fallback="true"),
         transform=_bool_transform,
+    )
+    _prompt_field(
+        "SETTINGS",
+        "check_comments",
+        "是否比对表/列注释 (true/false)",
+        default=cfg.get("SETTINGS", "check_comments", fallback="true"),
+        transform=_bool_transform,
+    )
+    _prompt_field(
+        "SETTINGS",
+        "infer_schema_mapping",
+        "是否自动推导 schema 映射 (true/false，默认 false，建议保持 false)",
+        default=cfg.get("SETTINGS", "infer_schema_mapping", fallback="true"),
+        transform=_bool_transform,
+    )
+    _prompt_field(
+        "SETTINGS",
+        "dbcat_chunk_size",
+        "dbcat 单批对象数量 (默认 150，可适当增大)",
+        default=cfg.get("SETTINGS", "dbcat_chunk_size", fallback="150"),
+        validator=_validate_positive_int,
     )
     _prompt_field(
         "SETTINGS",
@@ -948,8 +981,12 @@ def get_source_objects(ora_cfg: OraConfig, schemas_list: List[str]) -> SourceObj
     return dict(source_objects)
 
 
-def validate_remap_rules(remap_rules: RemapRules, source_objects: SourceObjectMap) -> List[str]:
-    """检查 remap 规则中的源对象是否存在于 Oracle source_objects 中。"""
+def validate_remap_rules(
+    remap_rules: RemapRules,
+    source_objects: SourceObjectMap,
+    remap_file_path: Optional[str] = None
+) -> List[str]:
+    """检查 remap 规则中的源对象是否存在于 Oracle source_objects 中，并清洗无效条目。"""
     log.info("正在验证 Remap 规则...")
     remap_keys = set(remap_rules.keys())
     source_keys = set(source_objects.keys())
@@ -967,8 +1004,44 @@ def validate_remap_rules(remap_rules: RemapRules, source_objects: SourceObjectMa
         log.warning("  (这些对象在源端 Oracle (config.ini 中配置的 schema) 中未找到)")
         for key in extraneous_keys:
             log.warning(f"    - 无效条目: {key}")
+        # 将无效规则另存，不修改原始 remap 文件
+        if remap_file_path:
+            remap_path = Path(remap_file_path).expanduser()
+            try:
+                raw_lines = remap_path.read_text(encoding="utf-8").splitlines()
+            except OSError as exc:
+                log.warning("  [规则警告] 无法读取 remap 文件以清洗无效条目: %s", exc)
+            else:
+                removed: List[str] = []
+                extra_set = set(extraneous_keys)
+                for line in raw_lines:
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith("#") or "=" not in stripped:
+                        continue
+                    src_part = stripped.split("=", 1)[0].strip().upper()
+                    if src_part in extra_set:
+                        removed.append(line)
+
+                if removed:
+                    invalid_path = remap_path.with_name(
+                        f"{remap_path.stem}_invalid{remap_path.suffix or '.txt'}"
+                    )
+                    try:
+                        invalid_path.write_text("\n".join(removed) + "\n", encoding="utf-8")
+                    except OSError as exc:
+                        log.warning("  [规则警告] 写入无效 remap 条目文件失败: %s", exc)
+                    else:
+                        log.warning(
+                            "  [规则警告] 检出 %d 条无效 remap 规则并保存到: %s (原 remap_rules 未修改)",
+                            len(removed),
+                            invalid_path
+                        )
     else:
         log.info("Remap 规则验证通过，所有规则中的源对象均存在。")
+
+    # 从内存映射中移除无效规则，避免后续继续使用
+    for key in extraneous_keys:
+        remap_rules.pop(key, None)
 
     return extraneous_keys
 
@@ -980,10 +1053,32 @@ def strip_body_suffix(name: str) -> str:
     return text
 
 
+def derive_schema_mapping_from_rules(remap_rules: RemapRules) -> Dict[str, str]:
+    """
+    基于 remap_rules 推导 schema 级别的映射：
+      如果某个源 schema 只映射到唯一的目标 schema，则作为默认映射；
+      避免多对多/多对一的模糊情况。
+    """
+    schema_targets: Dict[str, Set[str]] = defaultdict(set)
+    for src_full, tgt_full in remap_rules.items():
+        if '.' not in src_full or '.' not in tgt_full:
+            continue
+        src_schema, _ = src_full.split('.', 1)
+        tgt_schema, _ = tgt_full.split('.', 1)
+        schema_targets[src_schema.upper()].add(tgt_schema.upper())
+
+    schema_mapping: Dict[str, str] = {}
+    for src_schema, tgt_set in schema_targets.items():
+        if len(tgt_set) == 1:
+            schema_mapping[src_schema] = next(iter(tgt_set))
+    return schema_mapping
+
+
 def resolve_remap_target(
     src_name: str,
     obj_type: str,
-    remap_rules: RemapRules
+    remap_rules: RemapRules,
+    schema_mapping: Optional[Dict[str, str]] = None
 ) -> Optional[str]:
     obj_type_u = obj_type.upper()
     candidate_keys: List[str] = [src_name]
@@ -995,13 +1090,21 @@ def resolve_remap_target(
             if obj_type_u == 'PACKAGE BODY':
                 return strip_body_suffix(tgt)
             return tgt
+
+    if schema_mapping and '.' in src_name and obj_type_u != 'TABLE':
+        src_schema, src_obj = src_name.split('.', 1)
+        tgt_schema = schema_mapping.get(src_schema.upper())
+        if tgt_schema:
+            return f"{tgt_schema}.{src_obj}"
     return None
 
 
 def generate_master_list(
     source_objects: SourceObjectMap,
     remap_rules: RemapRules,
-    enabled_primary_types: Optional[Set[str]] = None
+    enabled_primary_types: Optional[Set[str]] = None,
+    schema_mapping: Optional[Dict[str, str]] = None,
+    precomputed_mapping: Optional[FullObjectMapping] = None
 ) -> MasterCheckList:
     """
     生成“最终校验清单”并检测 "多对一" 映射。
@@ -1021,21 +1124,25 @@ def generate_master_list(
             if obj_type_u not in allowed_primary:
                 continue
 
-            tgt_name = resolve_remap_target(src_name_u, obj_type_u, remap_rules) or src_name_u
+            if precomputed_mapping and src_name_u in precomputed_mapping:
+                tgt_name = precomputed_mapping[src_name_u].get(obj_type_u, src_name_u)
+            else:
+                tgt_name = resolve_remap_target(
+                    src_name_u, obj_type_u, remap_rules, schema_mapping
+                ) or src_name_u
             tgt_name_u = tgt_name.upper()
 
             key = (tgt_name_u, obj_type_u)
             if key in target_tracker:
                 existing_src = target_tracker[key]
-                log.error(f"{'='*80}")
-                log.error(f"                 !!! 致命配置错误 !!!")
-                log.error(f"发现“多对一”映射。同一个目标对象 '{tgt_name_u}' (类型 {obj_type_u}) 被映射了多次：")
-                log.error(f"  1. 源: '{existing_src}' -> 目标: '{tgt_name_u}'")
-                log.error(f"  2. 源: '{src_name_u}' -> 目标: '{tgt_name_u}'")
-                log.error("这会导致校验逻辑混乱。请检查您的 remap_rules.txt 文件，")
-                log.error("确保每一个目标对象只被一个源对象所映射。")
-                log.error(f"{'='*80}")
-                sys.exit(1)
+                if existing_src != src_name_u:
+                    log.warning(
+                        "检测到多对一映射: 目标 %s (类型 %s) 已由 %s 映射，当前 %s 将回退为 1:1 映射。",
+                        tgt_name_u, obj_type_u, existing_src, src_name_u
+                    )
+                    tgt_name_u = src_name_u
+                    tgt_name = src_name_u
+                    key = (tgt_name_u, obj_type_u)
 
             target_tracker[key] = src_name_u
             master_list.append((src_name_u, tgt_name_u, obj_type_u))
@@ -1044,18 +1151,35 @@ def generate_master_list(
     return master_list
 
 
-def build_full_object_mapping(source_objects: SourceObjectMap, remap_rules: RemapRules) -> FullObjectMapping:
+def build_full_object_mapping(
+    source_objects: SourceObjectMap,
+    remap_rules: RemapRules,
+    schema_mapping: Optional[Dict[str, str]] = None
+) -> FullObjectMapping:
     """
     为所有受管对象建立映射 (源 -> 目标)。
     返回 {'SRC.OBJ': {'TYPE': 'TGT.OBJ'}}
     """
     mapping: FullObjectMapping = {}
+    target_tracker: Dict[Tuple[str, str], str] = {}
     for src_name, obj_types in source_objects.items():
         src_name_u = src_name.upper()
         for obj_type in obj_types:
             obj_type_u = obj_type.upper()
-            tgt_name = resolve_remap_target(src_name_u, obj_type_u, remap_rules) or src_name_u
-            mapping.setdefault(src_name_u, {})[obj_type_u] = tgt_name.upper()
+            tgt_name = resolve_remap_target(
+                src_name_u, obj_type_u, remap_rules, schema_mapping
+            ) or src_name_u
+            tgt_name_u = tgt_name.upper()
+            key = (tgt_name_u, obj_type_u)
+            existing_src = target_tracker.get(key)
+            if existing_src and existing_src != src_name_u:
+                log.warning(
+                    "检测到多对一映射: 目标 %s (类型 %s) 已由 %s 映射，当前 %s 回退为 1:1 映射。",
+                    tgt_name_u, obj_type_u, existing_src, src_name_u
+                )
+                tgt_name_u = src_name_u
+            target_tracker[key] = src_name_u
+            mapping.setdefault(src_name_u, {})[obj_type_u] = tgt_name_u
     return mapping
 
 
@@ -2711,7 +2835,8 @@ def compare_sequences_for_schema(
             tgt_schema=tgt_schema,
             missing_sequences=set(),
             extra_sequences=tgt_seqs_snapshot,
-            note=note
+            note=note,
+            missing_mappings=[]
         )
 
     tgt_seqs = ob_meta.sequences.get(tgt_schema.upper(), set())
@@ -2727,7 +2852,11 @@ def compare_sequences_for_schema(
             tgt_schema=tgt_schema,
             missing_sequences=missing,
             extra_sequences=extra,
-            note=None
+            note=None,
+            missing_mappings=[
+                (f"{src_schema.upper()}.{seq}", f"{tgt_schema.upper()}.{seq}")
+                for seq in sorted(missing)
+            ]
         )
 
 
@@ -2753,24 +2882,37 @@ def compare_triggers_for_table(
     tgt_names = set(tgt_trg.keys())
 
     src_names: Set[str] = set()
+    missing_mapping_lookup: Dict[str, str] = {}
     for name in src_names_raw:
         full = f"{src_schema.upper()}.{name.upper()}"
         mapped = get_mapped_target(full_object_mapping, full, 'TRIGGER')
         if mapped and '.' in mapped:
             _, tgt_name = mapped.split('.', 1)
-            src_names.add(tgt_name.upper())
+            tgt_name_u = tgt_name.upper()
         else:
-            src_names.add(name.upper())
+            tgt_name_u = name.upper()
             ensure_mapping_entry(
                 full_object_mapping,
                 full,
                 'TRIGGER',
-                f"{tgt_schema.upper()}.{name.upper()}"
+                f"{tgt_schema.upper()}.{tgt_name_u}"
             )
+        src_names.add(tgt_name_u)
+        missing_mapping_lookup[tgt_name_u] = name.upper()
 
     missing = src_names - tgt_names
     extra = tgt_names - src_names
     detail_mismatch: List[str] = []
+    missing_mappings: List[Tuple[str, str]] = []
+
+    for tgt_name in sorted(missing):
+        src_name = missing_mapping_lookup.get(tgt_name, tgt_name)
+        missing_mappings.append(
+            (
+                f"{src_schema.upper()}.{src_name}",
+                f"{tgt_schema.upper()}.{tgt_name}"
+            )
+        )
 
     common = src_names & tgt_names
     for name in common:
@@ -2801,7 +2943,8 @@ def compare_triggers_for_table(
             table=f"{tgt_schema}.{tgt_table}",
             missing_triggers=missing,
             extra_triggers=extra,
-            detail_mismatch=detail_mismatch
+            detail_mismatch=detail_mismatch,
+            missing_mappings=missing_mappings
         )
 
 
@@ -2931,12 +3074,18 @@ def check_extra_objects(
             if not missing_src and not extra_tgt:
                 extra_results["sequence_ok"].append(mapping_label)
             else:
+                missing_map = [
+                    (f"{src_schema_u}.{src_name}", f"{tgt_schema_u}.{tgt_name}")
+                    for src_name, tgt_name in entries
+                    if tgt_name not in actual_tgt_names
+                ]
                 extra_results["sequence_mismatched"].append(SequenceMismatch(
                     src_schema=src_schema_u,
                     tgt_schema=tgt_schema_u,
                     missing_sequences=missing_src,
                     extra_sequences=extra_tgt,
-                    note=None
+                    note=None,
+                    missing_mappings=missing_map
                 ))
 
     return extra_results
@@ -3280,15 +3429,18 @@ def fetch_dbcat_schema_objects(
         type_map = schema_requests.get(schema)
         if not type_map:
             continue
-        prepared: List[Tuple[str, str, str, List[str]]] = []
+        prepared: List[Tuple[str, str, List[str]]] = []
         for obj_type, names in type_map.items():
             option = DBCAT_OPTION_MAP.get(obj_type.upper())
             if not option:
                 continue
+            if obj_type.upper() == "MATERIALIZED VIEW":
+                log.info("[dbcat] 跳过 MATERIALIZED VIEW 自动导出 (dbcat 不支持 --mview)，需要时请手工处理。")
+                continue
             name_list = sorted(set(n.upper() for n in names if n))
             if not name_list:
                 continue
-            prepared.append((option, ','.join(name_list), obj_type.upper(), name_list))
+            prepared.append((option, obj_type.upper(), name_list))
 
         if not prepared:
             continue
@@ -3296,42 +3448,47 @@ def fetch_dbcat_schema_objects(
         run_dir = base_output / f"{schema}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         ensure_dir(run_dir)
 
-        cmd = [
-            str(dbcat_cli),
-            'convert',
-            '-H', host,
-            '-P', port,
-            '-u', ora_cfg['user'],
-            '-p', ora_cfg['password'],
-            '-D', schema,
-            '--from', settings.get('dbcat_from', ''),
-            '--to', settings.get('dbcat_to', ''),
-            '--file-per-object',
-            '-f', str(run_dir)
-        ]
-        if service:
-            cmd.extend(['--service-name', service])
+        def _run_dbcat_chunk(option: str, chunk_names: List[str]) -> None:
+            cmd = [
+                str(dbcat_cli),
+                'convert',
+                '-H', host,
+                '-P', port,
+                '-u', ora_cfg['user'],
+                '-p', ora_cfg['password'],
+                '-D', schema,
+                '--from', settings.get('dbcat_from', ''),
+                '--to', settings.get('dbcat_to', ''),
+                '--file-per-object',
+                '-f', str(run_dir)
+            ]
+            if service:
+                cmd.extend(['--service-name', service])
+            cmd.extend([option, ','.join(chunk_names)])
 
-        for option, names_str, _, _ in prepared:
-            cmd.extend([option, names_str])
+            env = os.environ.copy()
+            env['JAVA_HOME'] = java_home
+            env.setdefault('JRE_HOME', java_home)
 
-        env = os.environ.copy()
-        env['JAVA_HOME'] = java_home
-        env.setdefault('JRE_HOME', java_home)
+            log.info("[dbcat] 导出 schema=%s option=%s 对象数=%d...", schema, option, len(chunk_names))
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='ignore',
+                timeout=int(settings.get('cli_timeout', 600)),
+                env=env
+            )
+            if proc.returncode != 0:
+                log.error("[dbcat] 转换 schema=%s 失败: %s", schema, proc.stderr or proc.stdout)
+                sys.exit(1)
 
-        log.info("[dbcat] 正在导出 schema=%s 对象 DDL...", schema)
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='ignore',
-            timeout=int(settings.get('cli_timeout', 600)),
-            env=env
-        )
-        if proc.returncode != 0:
-            log.error("[dbcat] 转换 schema=%s 失败: %s", schema, proc.stderr or proc.stdout)
-            sys.exit(1)
+        max_chunk = int(settings.get('dbcat_chunk_size', 150)) or 150
+        for option, obj_type, name_list in prepared:
+            chunks = [name_list[i:i + max_chunk] for i in range(0, len(name_list), max_chunk)]
+            for chunk in chunks:
+                _run_dbcat_chunk(option, chunk)
 
         schema_dir = locate_dbcat_schema_dir(run_dir, schema)
         if not schema_dir:
@@ -3339,8 +3496,8 @@ def fetch_dbcat_schema_objects(
             sys.exit(1)
 
         schema_result = results.setdefault(schema.upper(), {})
-        for _, _, obj_type, name_list in prepared:
-            current_map = schema_requests.get(schema.upper(), {})
+        for option, obj_type, name_list in prepared:
+            current_map = schema_requests.get(schema, {})
             remaining_names = current_map.get(obj_type, set())
             type_result = schema_result.setdefault(obj_type, {})
             for obj_name in name_list:
@@ -4049,17 +4206,27 @@ def generate_fixup_scripts(
             continue
         src_schema, _ = src_name.split('.')
         tgt_schema, _ = table_str.split('.')
-        for trg_name in sorted(item.missing_triggers):
-            trg_name_u = trg_name.upper()
-            queue_request(src_schema, 'TRIGGER', trg_name_u)
-            src_full = f"{src_schema.upper()}.{trg_name_u}"
-            mapped = get_mapped_target(full_object_mapping, src_full, 'TRIGGER')
-            if mapped and '.' in mapped:
-                tgt_schema_final, tgt_obj = mapped.split('.')
-            else:
-                tgt_schema_final = tgt_schema.upper()
-                tgt_obj = trg_name_u
-            trigger_tasks.append((src_schema, trg_name_u, tgt_schema_final, tgt_obj))
+        # 优先使用缺失映射对（源->目标），确保 dbcat 按源名导出
+        if item.missing_mappings:
+            for src_full, tgt_full in item.missing_mappings:
+                if '.' not in src_full or '.' not in tgt_full:
+                    continue
+                src_schema_u, src_trg = src_full.split('.', 1)
+                tgt_schema_final, tgt_obj = tgt_full.split('.', 1)
+                queue_request(src_schema_u, 'TRIGGER', src_trg)
+                trigger_tasks.append((src_schema_u, src_trg, tgt_schema_final, tgt_obj))
+        else:
+            for trg_name in sorted(item.missing_triggers):
+                trg_name_u = trg_name.upper()
+                queue_request(src_schema, 'TRIGGER', trg_name_u)
+                src_full = f"{src_schema.upper()}.{trg_name_u}"
+                mapped = get_mapped_target(full_object_mapping, src_full, 'TRIGGER')
+                if mapped and '.' in mapped:
+                    tgt_schema_final, tgt_obj = mapped.split('.')
+                else:
+                    tgt_schema_final = tgt_schema.upper()
+                    tgt_obj = trg_name_u
+                trigger_tasks.append((src_schema, trg_name_u, tgt_schema_final, tgt_obj))
 
     dbcat_data = fetch_dbcat_schema_objects(ora_cfg, settings, schema_requests)
 
@@ -4074,9 +4241,15 @@ def generate_fixup_scripts(
     oracle_conn = None
 
     def get_fallback_ddl(schema: str, obj_type: str, obj_name: str) -> Optional[str]:
-        """当 dbcat 缺失 DDL 时尝试使用 DBMS_METADATA 兜底 (仅针对 TYPE/TYPE BODY)。"""
+        """当 dbcat 缺失 DDL 时尝试使用 DBMS_METADATA 兜底。"""
         nonlocal oracle_conn
-        if obj_type.upper() not in ('TYPE', 'TYPE BODY'):
+        allowed_types = {
+            'TABLE', 'VIEW', 'MATERIALIZED VIEW',
+            'PROCEDURE', 'FUNCTION', 'PACKAGE', 'PACKAGE BODY',
+            'SYNONYM', 'SEQUENCE', 'TRIGGER',
+            'TYPE', 'TYPE BODY'
+        }
+        if obj_type.upper() not in allowed_types:
             return None
         try:
             if oracle_conn is None:
@@ -4100,6 +4273,10 @@ def generate_fixup_scripts(
     for src_schema, seq_name, tgt_schema, tgt_name in sequence_tasks:
         ddl = get_dbcat_ddl(src_schema, 'SEQUENCE', seq_name)
         if not ddl:
+            ddl = get_fallback_ddl(src_schema, 'SEQUENCE', seq_name)
+            if ddl:
+                log.info("[FIXUP] 使用 DBMS_METADATA 兜底导出 SEQUENCE %s.%s。", src_schema, seq_name)
+        if not ddl:
             log.warning("[FIXUP] 未找到 SEQUENCE %s.%s 的 dbcat DDL。", src_schema, seq_name)
             continue
         ddl_adj = adjust_ddl_for_object(
@@ -4121,6 +4298,10 @@ def generate_fixup_scripts(
     log.info("[FIXUP] (2/9) 正在生成缺失的 TABLE CREATE 脚本...")
     for src_schema, src_table, tgt_schema, tgt_table in missing_tables:
         ddl = get_dbcat_ddl(src_schema, 'TABLE', src_table)
+        if not ddl:
+            ddl = get_fallback_ddl(src_schema, 'TABLE', src_table)
+            if ddl:
+                log.info("[FIXUP] 使用 DBMS_METADATA 兜底导出 TABLE %s.%s。", src_schema, src_table)
         if not ddl:
             log.warning("[FIXUP] 未找到 TABLE %s.%s 的 dbcat DDL。", src_schema, src_table)
             continue
@@ -4304,6 +4485,10 @@ def generate_fixup_scripts(
     for src_schema, trg_name, tgt_schema, tgt_obj in trigger_tasks:
         ddl = get_dbcat_ddl(src_schema, 'TRIGGER', trg_name)
         if not ddl:
+            ddl = get_fallback_ddl(src_schema, 'TRIGGER', trg_name)
+            if ddl:
+                log.info("[FIXUP] 使用 DBMS_METADATA 兜底导出 TRIGGER %s.%s。", src_schema, trg_name)
+        if not ddl:
             log.warning("[FIXUP] 未找到 TRIGGER %s.%s 的 dbcat DDL。", src_schema, trg_name)
             continue
         ddl_adj = adjust_ddl_for_object(
@@ -4444,6 +4629,10 @@ def export_missing_table_view_mappings(
     if not report_dir:
         return None
 
+    output_dir = Path(report_dir) / "tables_views_miss"
+    if output_dir.exists():
+        shutil.rmtree(output_dir, ignore_errors=True)
+
     grouped: Dict[str, List[str]] = defaultdict(list)
     for obj_type, tgt_name, src_name in tv_results.get("missing", []):
         if obj_type.upper() not in ("TABLE", "VIEW"):
@@ -4456,7 +4645,6 @@ def export_missing_table_view_mappings(
     if not grouped:
         return None
 
-    output_dir = Path(report_dir) / "tables_views_miss"
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -4880,18 +5068,41 @@ def print_final_report(
         "7. 序列 (SEQUENCE) 一致性检查", extra_results["sequence_mismatched"], ["Schema 映射", "差异详情"],
         lambda item: (
             Text(f"{item.src_schema}->{item.tgt_schema}"),
-            Text(f"- 缺失: {sorted(item.missing_sequences)}\n" if item.missing_sequences else "", style="missing") +
-            Text(f"+ 多余: {sorted(item.extra_sequences)}\n" if item.extra_sequences else "", style="missing") +
-            (Text(f"* {item.note}\n", style="missing") if item.note else Text(""))
+            (
+                Text("- 缺失:\n", style="missing") +
+                Text(
+                    "\n".join([f"{src}={tgt}" for src, tgt in item.missing_mappings]) + ("\n" if item.missing_mappings else ""),
+                    style="missing"
+                )
+                if item.missing_sequences else Text("")
+            )
+            + (
+                Text(f"+ 多余: {sorted(item.extra_sequences)}\n", style="mismatch")
+                if item.extra_sequences else Text("")
+            )
+            + (Text(f"* {item.note}\n", style="missing") if item.note else Text(""))
         )
     )
     print_ext_mismatch_table(
         "8. 触发器 (TRIGGER) 一致性检查", extra_results["trigger_mismatched"], ["表名", "差异详情"],
         lambda item: (
             Text(item.table),
-            Text(f"- 缺失: {sorted(item.missing_triggers)}\n" if item.missing_triggers else "", style="missing") +
-            Text(f"+ 多余: {sorted(item.extra_triggers)}\n" if item.extra_triggers else "", style="mismatch") +
-            Text('\n'.join([f"* {d}" for d in item.detail_mismatch]))
+            (
+                Text("- 缺失:\n", style="missing")
+                if item.missing_triggers else Text("")
+            )
+            + (
+                Text(
+                    "\n".join([f"{src}={tgt}" for src, tgt in item.missing_mappings]) + ("\n" if item.missing_mappings else ""),
+                    style="missing"
+                )
+                if item.missing_mappings else Text("")
+            )
+            + (
+                Text(f"+ 多余: {sorted(item.extra_triggers)}\n", style="mismatch")
+                if item.extra_triggers else Text("")
+            )
+            + Text('\n'.join([f"* {d}" for d in item.detail_mismatch]))
         )
     )
 
@@ -5088,11 +5299,38 @@ def main():
     source_objects = get_source_objects(ora_cfg, settings['source_schemas_list'])
 
     # 4) 验证 Remap 规则
-    extraneous_rules = validate_remap_rules(remap_rules, source_objects)
+    extraneous_rules = validate_remap_rules(remap_rules, source_objects, settings.get("remap_file"))
+    schema_mapping_from_tables: Optional[Dict[str, str]] = None
 
-    # 5) 生成主校验清单
-    master_list = generate_master_list(source_objects, remap_rules, enabled_primary_types)
-    full_object_mapping = build_full_object_mapping(source_objects, remap_rules)
+    # 5) 先不推导 schema，生成基础映射/清单，用于推导 TABLE 唯一映射
+    base_full_mapping = build_full_object_mapping(
+        source_objects,
+        remap_rules,
+        None
+    )
+    base_master_list = generate_master_list(
+        source_objects,
+        remap_rules,
+        enabled_primary_types,
+        None,
+        base_full_mapping
+    )
+    if settings.get("enable_schema_mapping_infer"):
+        schema_mapping_from_tables = build_schema_mapping(base_master_list)
+
+    # 6) 基于 TABLE 推导的 schema 映射（仅作用于非 TABLE 对象）重建映射与校验清单
+    full_object_mapping = build_full_object_mapping(
+        source_objects,
+        remap_rules,
+        schema_mapping_from_tables
+    )
+    master_list = generate_master_list(
+        source_objects,
+        remap_rules,
+        enabled_primary_types,
+        schema_mapping_from_tables,
+        full_object_mapping
+    )
     oracle_dependencies: List[DependencyRecord] = []
     expected_dependency_pairs: Set[Tuple[str, str, str, str]] = set()
     skipped_dependency_pairs: List[DependencyIssue] = []

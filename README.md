@@ -18,6 +18,7 @@
 - 覆盖的对象类型包括 `TABLE/VIEW/MATERIALIZED VIEW/PROCEDURE/FUNCTION/PACKAGE/PACKAGE BODY/SYNONYM/JOB/SCHEDULE/TYPE/TYPE BODY`，并扩展检查 `INDEX/CONSTRAINT/SEQUENCE/TRIGGER`。
 - 表校验除了存在性外，还会校验列名集合与 `VARCHAR/VARCHAR2` 长度（目标端需在 `[ceil(1.5*x), ceil(2.5*x)]` 区间），并生成 `ALTER TABLE` 修补建议。
 - 新增表/列注释一致性检查（DBA_TAB_COMMENTS / DBA_COL_COMMENTS），支持通过 `check_comments` 开关关闭，批量查询仅覆盖待校验的表，避免全库扫描。
+- Remap 规则检查：源端不存在的 Remap 条目会被识别并另存到同目录的 `*_invalid.txt` 便于复查，原始 `remap_rules.txt` 不会被修改。
 - 自动收集 `DBA_DEPENDENCIES` 并映射到目标 schema，输出缺失/多余依赖、依赖重编译脚本和所需 `GRANT`。
 - 启动时会提示需要 DBA/SELECT ANY DICTIONARY/SELECT_CATALOG_ROLE 等权限以查询 `DBA_*` 视图，否则元数据不完整。
 - 基于 dbcat 导出的 DDL + 本地修补器生成结构化的 `fixup_scripts/` 目录，含 SEQUENCE/TABLE/代码对象/INDEX/CONSTRAINT/TRIGGER/COMPILE/GRANT/TABLE_ALTER 等脚本。
@@ -81,6 +82,8 @@ pip install -r requirements.txt
   - `check_extra_types`：限制扩展校验的模块，默认 `index,constraint,sequence,trigger`，可按需删减。
   - `check_dependencies`：`true/false`，关闭后跳过依赖校验与授权建议。
   - `check_comments`：`true/false`，控制是否比对表/列注释。
+  - `infer_schema_mapping`：`true/false`，是否根据 remap 后的 TABLE 映射自动推导 schema 映射（默认 `true`，仅作用于非 TABLE 对象，如 VIEW/SYNONYM/TRIGGER/SEQ/MVIEW/TYPE 等；TABLE 仍按显式规则 1:1，推导来源仅限表的唯一映射）。
+  - `dbcat_chunk_size`：单次传给 dbcat 的对象数，默认 `150`，可调大以减少批次数。
   - `obclient_timeout`：每次 `obclient` 调用的超时（秒，默认 60）。
   - `cli_timeout`：shell 工具（如 dbcat）超时，默认 600 秒。
   - `dbcat_bin`：dbcat 根目录或 `bin/dbcat` 可执行文件路径。
